@@ -13,6 +13,7 @@
 #include <zephyr/drivers/pinctrl.h>
 #include <zephyr/irq.h>
 #include <zephyr/kernel.h>
+#include <zephyr/drivers/hwsem_ipm.h>
 
 #include "flash_ospi_is25wx.h"
 
@@ -25,6 +26,26 @@ LOG_MODULE_REGISTER(OSPI_FLASH, CONFIG_FLASH_LOG_LEVEL);
 
 #define ADDR_IS_SEC_ALIGNED(addr, _bits) ((addr)&BIT_MASK(_bits))
 #define FLASH_SEC_SIZE_BIT               12
+
+// hwsem
+#define DEVICE_DT_GET_AND_COMMA(node_id) DEVICE_DT_GET(node_id),
+
+/* Generate a list of devices for all instances of the "compat" */
+#define DEVS_FOR_DT_COMPAT(compat) DT_FOREACH_STATUS_OKAY(compat, DEVICE_DT_GET_AND_COMMA)
+
+static const struct device *const devices[] = {
+#ifdef CONFIG_ALIF_HWSEM
+	DEVS_FOR_DT_COMPAT(alif_hwsem)
+#endif
+};
+
+#if defined(CONFIG_SOC_AE722F80F55D5XX_RTSS_HP)
+#define MASTER_ID 0xF00DF00D
+#elif defined(CONFIG_SOC_AE722F80F55D5XX_RTSS_HE)
+#define MASTER_ID 0xC0DEC0DE
+#endif
+
+#define OSPI1CTRL0DEFVAL 0xC04407
 
 static void flash_alif_ospi_irq_config_func(const struct device *dev);
 
@@ -615,6 +636,9 @@ static int flash_is25wx_ospi_init(const struct device *dev)
 	struct alif_flash_ospi_config *dev_cfg = (struct alif_flash_ospi_config *)dev->config;
 	struct alif_flash_ospi_dev_data *dev_data = (struct alif_flash_ospi_dev_data *)dev->data;
 
+	/* Use only the single HWSEM device instance for this test */
+	const struct device *device = devices[0];
+
 	struct ospi_init init_config;
 
 	memset(&init_config, 0, sizeof(struct ospi_init));
@@ -649,6 +673,10 @@ static int flash_is25wx_ospi_init(const struct device *dev)
 	dev_data->trans_conf.trans_type = 0;
 	dev_data->trans_conf.rx_ds_enable = 0;
 
+	/* First trylock: can return 0 (success) or -EBUSY (busy, locked by another core) */
+	while (hwsem_trylock(device, MASTER_ID) != 0) {
+	} /* spinwait for our turn */
+
 	/* initialize semaphore */
 	k_sem_init(&dev_data->sem, 1, 1);
 	k_event_init(&dev_data->event_f);
@@ -656,23 +684,24 @@ static int flash_is25wx_ospi_init(const struct device *dev)
 	pinctrl_apply_state(dev_cfg->pcfg, PINCTRL_STATE_DEFAULT);
 
 	/* IRQ Init */
+	NVIC_ClearPendingIRQ(DT_IRQN(OSPI_CTRL_NODE));
 	dev_cfg->irq_config(dev);
 
 	ret = alif_hal_ospi_initialize(&dev_data->ospi_handle, &init_config);
 	if (ret != 0) {
 		ret = err_map_alif_hal_to_zephyr(ret);
-		return ret;
+		goto ret_release;
 	}
 	/* Initialize Configuration */
 	ret = alif_hal_ospi_prepare_transfer(dev_data->ospi_handle, &dev_data->trans_conf);
 	if (ret != 0) {
 		ret = err_map_alif_hal_to_zephyr(ret);
-		return ret;
+		goto ret_release;
 	}
 
 	ret = set_write_enable(dev, OSPI_DFS_BITS_8);
 	if (ret != 0) {
-		return ret;
+		goto ret_release;
 	}
 
 	/* Prepare command and address for setting flash in octal mode */
@@ -692,13 +721,13 @@ static int flash_is25wx_ospi_init(const struct device *dev)
 	/* Select Chip */
 	ret = set_cs_pin(dev_data->ospi_handle, SLAVE_ACTIVATE);
 	if (ret != 0) {
-		return ret;
+		goto ret_release;
 	}
 
 	ret = alif_hal_ospi_prepare_transfer(dev_data->ospi_handle, &dev_data->trans_conf);
 	if (ret != 0) {
 		ret = err_map_alif_hal_to_zephyr(ret);
-		return ret;
+		goto ret_release;
 	}
 
 	k_event_clear(&dev_data->event_f, OSPI_EVENT_TRANSFER_COMPLETE | OSPI_EVENT_DATA_LOST);
@@ -707,7 +736,7 @@ static int flash_is25wx_ospi_init(const struct device *dev)
 			dev_data->cmd_buf, CONFIG_FLASH_PREPARE_CMD_LEN);
 	if (ret != 0) {
 		ret = err_map_alif_hal_to_zephyr(ret);
-		return ret;
+		goto ret_release;
 	}
 
 	event = k_event_wait(&dev_data->event_f,
@@ -716,13 +745,14 @@ static int flash_is25wx_ospi_init(const struct device *dev)
 	if (!(event & OSPI_EVENT_TRANSFER_COMPLETE)) {
 		/* De-Select slave */
 		set_cs_pin(dev_data->ospi_handle, SLAVE_DE_ACTIVATE);
-		return -EIO;
+		ret = -EIO;
+		goto ret_release;
 	}
 
 	/* De-Select slave */
 	ret = set_cs_pin(dev_data->ospi_handle, SLAVE_DE_ACTIVATE);
 	if (ret != 0) {
-		return ret;
+		goto ret_release;
 	}
 
 	/* Set Default Wait Cycle */
@@ -741,12 +771,12 @@ static int flash_is25wx_ospi_init(const struct device *dev)
 	ret = alif_hal_ospi_prepare_transfer(dev_data->ospi_handle, &dev_data->trans_conf);
 	if (ret != 0) {
 		ret = err_map_alif_hal_to_zephyr(ret);
-		return ret;
+		goto ret_release;
 	}
 
 	ret = set_write_enable(dev, OSPI_DFS_BITS_16);
 	if (ret != 0) {
-		return ret;
+		goto ret_release;
 	}
 
 	/* Re-configure */
@@ -757,13 +787,13 @@ static int flash_is25wx_ospi_init(const struct device *dev)
 	ret = alif_hal_ospi_prepare_transfer(dev_data->ospi_handle, &dev_data->trans_conf);
 	if (ret != 0) {
 		ret = err_map_alif_hal_to_zephyr(ret);
-		return ret;
+		goto ret_release;
 	}
 
 	/* Select Chip */
 	ret = set_cs_pin(dev_data->ospi_handle, SLAVE_ACTIVATE);
 	if (ret != 0) {
-		return ret;
+		goto ret_release;
 	}
 
 	k_event_clear(&dev_data->event_f, OSPI_EVENT_TRANSFER_COMPLETE | OSPI_EVENT_DATA_LOST);
@@ -772,7 +802,7 @@ static int flash_is25wx_ospi_init(const struct device *dev)
 	ret = alif_hal_ospi_send(dev_data->ospi_handle, dev_data->cmd_buf, 4);
 	if (ret != 0) {
 		ret = err_map_alif_hal_to_zephyr(ret);
-		return ret;
+		goto ret_release;
 	}
 
 	event = k_event_wait(&dev_data->event_f,
@@ -781,13 +811,14 @@ static int flash_is25wx_ospi_init(const struct device *dev)
 	if (!(event & OSPI_EVENT_TRANSFER_COMPLETE)) {
 		/* De-Select slave */
 		set_cs_pin(dev_data->ospi_handle, SLAVE_DE_ACTIVATE);
-		return -EIO;
+		ret = -EIO;
+		goto ret_release;
 	}
 
 	/* De-Select slave */
 	ret = set_cs_pin(dev_data->ospi_handle, SLAVE_DE_ACTIVATE);
 	if (ret != 0) {
-		return ret;
+		goto ret_release;
 	}
 
 	dev_data->ISSI_Flags |= FLASH_POWER;
@@ -796,6 +827,10 @@ static int flash_is25wx_ospi_init(const struct device *dev)
 		alif_hal_ospi_xip_enable(dev_data->ospi_handle);
 	}
 
+ret_release:
+	/* disable now, and enable OSPI1 IRQ on demand */
+	irq_disable(DT_IRQN(OSPI_CTRL_NODE));
+	hwsem_unlock(device, MASTER_ID);
 	return ret;
 }
 
