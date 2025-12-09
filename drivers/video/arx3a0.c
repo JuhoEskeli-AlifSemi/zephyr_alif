@@ -12,8 +12,10 @@
 #include <zephyr/drivers/video.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/video-controls.h>
 
-#define LOG_LEVEL CONFIG_LOG_DEFAULT_LEVEL
+//#define LOG_LEVEL CONFIG_LOG_DEFAULT_LEVEL
+#define LOG_LEVEL LOG_LEVEL_DBG
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(arx3a0);
 
@@ -978,6 +980,9 @@ static int arx3a0_get_caps(const struct device *dev, enum video_endpoint_id ep,
 			   struct video_caps *caps)
 {
 	caps->format_caps = fmts;
+
+	LOG_DBG("h: %u w: %u pxf: %u", caps->format_caps->height_max, caps->format_caps->width_max, caps->format_caps->pixelformat);
+
 	return 0;
 }
 
@@ -1130,10 +1135,19 @@ static int arx3a0_set_camera_gain(const struct device *dev, uint32_t gain)
 static int arx3a0_set_ctrl(const struct device *dev, unsigned int cid, void *value)
 {
 	switch (cid) {
-	case VIDEO_CID_CAMERA_GAIN:
+	case VIDEO_CID_GAIN:
 		return arx3a0_set_camera_gain(dev, (uint32_t)value);
 	default:
 		return -ENOTSUP;
+	}
+}
+
+static int arx3a0_set_stream(const struct device *dev, bool enable)
+{
+	if(enable) {
+		return arx3a0_stream_start(dev);
+	} else {
+		return arx3a0_stream_stop(dev);
 	}
 }
 
@@ -1141,8 +1155,7 @@ static const struct video_driver_api arx3a0_driver_api = {
 	.set_format = arx3a0_set_fmt,
 	.get_format = arx3a0_get_fmt,
 	.get_caps = arx3a0_get_caps,
-	.stream_start = arx3a0_stream_start,
-	.stream_stop = arx3a0_stream_stop,
+	.set_stream = arx3a0_set_stream,	
 	.set_ctrl = arx3a0_set_ctrl,
 };
 

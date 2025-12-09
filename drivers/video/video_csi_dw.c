@@ -498,10 +498,17 @@ static int csi2_dw_set_ctrl(const struct device *dev, unsigned int cid, void *va
 	return 0;
 }
 
+static int csi2_dw_set_stream(const struct device *dev, bool enable) {
+	if(enable) {
+		return csi2_dw_stream_start(dev);
+	} else {
+		return csi2_dw_stream_stop(dev);
+	}
+}
+
 static const struct video_driver_api csi2_dw_driver_api = {
 	.set_format = csi2_dw_set_format,
-	.stream_start = csi2_dw_stream_start,
-	.stream_stop = csi2_dw_stream_stop,
+	.set_stream = csi2_dw_set_stream,
 	.get_caps = csi2_dw_get_caps,
 	.set_ctrl = csi2_dw_set_ctrl,
 };
