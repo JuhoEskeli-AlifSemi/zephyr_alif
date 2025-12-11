@@ -393,12 +393,14 @@ struct dw_i3c_data {
 #ifdef CONFIG_I3C_USE_IBI
 	struct k_sem ibi_sts_sem;
 	struct k_sem sem_hj;
-#endif
+#endif	
 
 	struct dw_i3c_xfer xfer;
 
 	struct dw_i3c_i2c_dev_data dw_i3c_i2c_priv_data[DW_I3C_MAX_DEVS];
 };
+
+static volatile uint32_t latched_intr = 0;
 
 static uint8_t get_free_pos(uint32_t free_pos)
 {
@@ -516,6 +518,8 @@ static void dw_i3c_end_xfer(const struct device *dev)
 	struct dw_i3c_cmd *cmd;
 	uint32_t nresp, resp, rx_data;
 	int32_t i, j, k, ret = 0;
+
+	LOG_INF("dw_i3c_end_xfer");
 
 	nresp = QUEUE_STATUS_LEVEL_RESP(sys_read32(config->regs + QUEUE_STATUS_LEVEL));
 	for (i = 0; i < nresp; i++) {
@@ -860,7 +864,7 @@ static int dw_i3c_xfers(const struct device *dev, struct i3c_device_desc *target
 
 	ret = k_sem_take(&data->sem_xfer, K_MSEC(1000));
 	if (ret) {
-		LOG_ERR("%s: Semaphore err (%d)", dev->name, ret);
+		LOG_ERR("%s: Semaphore err1 (%d)", dev->name, ret);
 		goto error;
 	}
 
@@ -969,14 +973,21 @@ static int dw_i3c_i2c_transfer(const struct device *dev, struct i3c_i2c_device_d
 	}
 
 	/* Do not send broadcast address (0x7E) with I2C transfers */
+	LOG_INF("dw_i3c_i2c_transfer");
 	sys_write32(sys_read32(config->regs + DEVICE_CTRL) & ~DEV_CTRL_IBA_INCLUDE,
 		    config->regs + DEVICE_CTRL);
 
 	start_xfer(dev);
 
 	ret = k_sem_take(&data->sem_xfer, K_MSEC(1000));
+
+	if(ret == -EAGAIN) {
+		LOG_ERR("k_sem_take -EAGAIN");
+	}
+
 	if (ret) {
-		LOG_ERR("%s: Semaphore err (%d)", dev->name, ret);
+		LOG_ERR("%s: Semaphore err2 (%d)", dev->name, ret);
+		LOG_ERR("latched intr %u", latched_intr);
 		goto error;
 	}
 
@@ -1029,7 +1040,7 @@ static int dw_i3c_i2c_api_transfer(const struct device *dev, struct i2c_msg *msg
 {
 	struct i3c_i2c_device_desc *i2c_dev = dw_i3c_i2c_device_find(dev, addr);
 	int ret;
-
+	
 	if (i2c_dev == NULL) {
 		ret = -ENODEV;
 	} else {
@@ -1326,6 +1337,7 @@ static int i3c_dw_irq(const struct device *dev)
 	uint32_t present_state;
 
 	status = sys_read32(config->regs + INTR_STATUS);
+	latched_intr = status;
 	if (status & (INTR_TRANSFER_ERR_STAT | INTR_RESP_READY_STAT)) {
 		dw_i3c_end_xfer(dev);
 
@@ -1773,7 +1785,7 @@ static int dw_i3c_do_ccc(const struct device *dev, struct i3c_ccc_payload *paylo
 
 	ret = k_sem_take(&data->sem_xfer, K_MSEC(1000));
 	if (ret) {
-		LOG_ERR("%s: Semaphore err (%d)", dev->name, ret);
+		LOG_ERR("%s: Semaphore err3 (%d)", dev->name, ret);
 		goto error;
 	}
 
@@ -1923,7 +1935,7 @@ static int dw_i3c_do_daa(const struct device *dev)
 	start_xfer(dev);
 	ret = k_sem_take(&data->sem_xfer, K_MSEC(1000));
 	if (ret) {
-		LOG_ERR("%s: Semaphore err (%d)", dev->name, ret);
+		LOG_ERR("%s: Semaphore err4 (%d)", dev->name, ret);
 		k_mutex_unlock(&data->mt);
 		return ret;
 	}
