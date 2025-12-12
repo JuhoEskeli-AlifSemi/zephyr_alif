@@ -12,6 +12,31 @@
 #include <assert.h>
 #include <zephyr/drivers/pinctrl.h>
 
+//hwsem
+#ifdef CONFIG_ALIF_HWSEM
+#include <zephyr/drivers/hwsem_ipm.h>
+#define DEVICE_DT_GET_AND_COMMA(node_id) DEVICE_DT_GET(node_id),
+
+/* Generate a list of devices for all instances of the "compat" */
+#define DEVS_FOR_DT_COMPAT(compat) DT_FOREACH_STATUS_OKAY(compat, DEVICE_DT_GET_AND_COMMA)
+
+#define I3C_HWSEM_IDX 1
+
+static const struct device *const hwsemaphores[] = {
+
+	DEVS_FOR_DT_COMPAT(alif_hwsem)
+
+};
+
+#if defined(CONFIG_SOC_AE722F80F55D5XX_RTSS_HP)
+#define MASTER_ID 0xF00DF00D
+#elif defined(CONFIG_SOC_AE722F80F55D5XX_RTSS_HE)
+#define MASTER_ID 0xC0DEC0DE
+#endif
+
+#define I3C_IRQn 136
+#endif
+
 #define NANO_SEC        1000000000ULL
 #define BYTES_PER_DWORD 4
 
@@ -400,7 +425,7 @@ struct dw_i3c_data {
 	struct dw_i3c_i2c_dev_data dw_i3c_i2c_priv_data[DW_I3C_MAX_DEVS];
 };
 
-static volatile uint32_t latched_intr = 0;
+//static volatile uint32_t latched_intr = 0;
 
 static uint8_t get_free_pos(uint32_t free_pos)
 {
@@ -519,7 +544,7 @@ static void dw_i3c_end_xfer(const struct device *dev)
 	uint32_t nresp, resp, rx_data;
 	int32_t i, j, k, ret = 0;
 
-	LOG_INF("dw_i3c_end_xfer");
+	LOG_DBG("dw_i3c_end_xfer");
 
 	nresp = QUEUE_STATUS_LEVEL_RESP(sys_read32(config->regs + QUEUE_STATUS_LEVEL));
 	for (i = 0; i < nresp; i++) {
@@ -903,21 +928,35 @@ static int dw_i3c_i2c_transfer(const struct device *dev, struct i3c_i2c_device_d
 	struct dw_i3c_data *data = dev->data;
 	struct dw_i3c_xfer *xfer = &data->xfer;
 	int32_t ret, i, pos, nrxwords = 0, ntxwords = 0;
-	uint32_t present_state;
+	uint32_t present_state;	
+
+	#if CONFIG_ALIF_HWSEM
+	const struct device *hwsem = hwsemaphores[I3C_HWSEM_IDX];
+
+	/* First trylock: can return 0 (success) or -EBUSY (busy, locked by another core) */
+	while (hwsem_trylock(hwsem, MASTER_ID) != 0) {
+	} /* spinwait for our turn */
+
+	NVIC_ClearPendingIRQ(I3C_IRQn);
+	irq_enable(I3C_IRQn);
+	#endif
 
 	present_state = sys_read32(config->regs + PRESENT_STATE);
 	if (!(present_state & PRESENT_STATE_CURRENT_MASTER)) {
-		return -EACCES;
+		ret = -EACCES;
+		goto transmit_error;
 	}
 
 	if (num_msgs > data->cmdfifodepth) {
-		return -ENOTSUP;
+		ret = -ENOTSUP;
+		goto transmit_error;
 	}
 
 	pos = get_i2c_addr_pos(dev, target->addr);
 	if (pos < 0) {
 		LOG_ERR("%s: Invalid slave device", dev->name);
-		return -EINVAL;
+		ret = -EINVAL;
+		goto transmit_error;
 	}
 
 	for (i = 0; i < num_msgs; i++) {
@@ -929,13 +968,14 @@ static int dw_i3c_i2c_transfer(const struct device *dev, struct i3c_i2c_device_d
 	}
 
 	if (ntxwords > data->txfifodepth || nrxwords > data->rxfifodepth) {
-		return -ENOTSUP;
+		ret = -ENOTSUP;
+		goto transmit_error;
 	}
 
 	ret = k_mutex_lock(&data->mt, K_MSEC(1000));
 	if (ret) {
 		LOG_ERR("%s: Mutex err (%d)", dev->name, ret);
-		return ret;
+		goto transmit_error;
 	}
 
 	memset(xfer, 0, sizeof(struct dw_i3c_xfer));
@@ -973,7 +1013,7 @@ static int dw_i3c_i2c_transfer(const struct device *dev, struct i3c_i2c_device_d
 	}
 
 	/* Do not send broadcast address (0x7E) with I2C transfers */
-	LOG_INF("dw_i3c_i2c_transfer");
+	LOG_DBG("dw_i3c_i2c_transfer");
 	sys_write32(sys_read32(config->regs + DEVICE_CTRL) & ~DEV_CTRL_IBA_INCLUDE,
 		    config->regs + DEVICE_CTRL);
 
@@ -981,14 +1021,10 @@ static int dw_i3c_i2c_transfer(const struct device *dev, struct i3c_i2c_device_d
 
 	ret = k_sem_take(&data->sem_xfer, K_MSEC(1000));
 
-	if(ret == -EAGAIN) {
-		LOG_ERR("k_sem_take -EAGAIN");
-	}
-
 	if (ret) {
-		LOG_ERR("%s: Semaphore err2 (%d)", dev->name, ret);
-		LOG_ERR("latched intr %u", latched_intr);
-		goto error;
+		LOG_ERR("%s: Semaphore err (%d)", dev->name, ret);
+		//LOG_ERR("latched intr %u", latched_intr);
+		goto transmit_error;
 	}
 
 	for (i = 0; i < xfer->ncmds; i++) {
@@ -999,9 +1035,12 @@ static int dw_i3c_i2c_transfer(const struct device *dev, struct i3c_i2c_device_d
 
 	ret = xfer->ret;
 
-error:
+transmit_error:
 	k_mutex_unlock(&data->mt);
-
+	#if CONFIG_ALIF_HWSEM
+	irq_disable(I3C_IRQn);
+	hwsem_unlock(hwsem, MASTER_ID);
+	#endif
 	return ret;
 }
 
@@ -1337,7 +1376,7 @@ static int i3c_dw_irq(const struct device *dev)
 	uint32_t present_state;
 
 	status = sys_read32(config->regs + INTR_STATUS);
-	latched_intr = status;
+	//latched_intr = status;
 	if (status & (INTR_TRANSFER_ERR_STAT | INTR_RESP_READY_STAT)) {
 		dw_i3c_end_xfer(dev);
 
@@ -2248,19 +2287,29 @@ static int dw_i3c_init(const struct device *dev)
 	uint32_t queue_capability;
 	uint32_t device_ctrl_ext;
 
+	#if CONFIG_ALIF_HWSEM
+	/* HWSEM instance */
+	const struct device *hwsem = hwsemaphores[I3C_HWSEM_IDX];
+
+	/* First trylock: can return 0 (success) or -EBUSY (busy, locked by another core) */
+	while (hwsem_trylock(hwsem, MASTER_ID) != 0) {
+	} /* spinwait for our turn */
+	#endif
+	
 	if (!device_is_ready(config->clock)) {
-		return -ENODEV;
+		ret = -ENODEV;
+		goto error_exit;
 	}
 
 	ret = clock_control_on(config->clock, config->clock_subsys);
 	if (ret < 0) {
-		return ret;
+		goto error_exit;
 	}
 
 	ret = pinctrl_apply_state(config->pcfg, PINCTRL_STATE_DEFAULT);
 	if (ret != 0) {
 		LOG_ERR("Unable to configure pins err:%d", ret);
-		return ret;
+		goto error_exit;
 	}
 
 #ifdef CONFIG_I3C_USE_IBI
@@ -2314,7 +2363,7 @@ static int dw_i3c_init(const struct device *dev)
 
 	ret = dw_i3c_init_scl_timing(dev, ctrl_config);
 	if (ret != 0) {
-		return ret;
+		goto error_exit;
 	}
 
 	enable_interrupts(dev);
@@ -2329,13 +2378,13 @@ static int dw_i3c_init(const struct device *dev)
 
 	ret = i3c_addr_slots_init(dev);
 	if (ret != 0) {
-		return ret;
+		goto error_exit;
 	}
 
 	if (!(ctrl_config->is_secondary)) {
 		ret = set_controller_info(dev);
 		if (ret) {
-			return ret;
+			goto error_exit;
 		}
 	}
 
@@ -2345,13 +2394,21 @@ static int dw_i3c_init(const struct device *dev)
 		/* Perform bus initialization - skip if no I3C devices are known. */
 		if (config->common.dev_list.num_i3c > 0) {
 			ret = i3c_bus_init(dev, &config->common.dev_list);
+			if (ret) {
+				goto error_exit;
+			}
 		}
 		/* Bus Initialization Complete, allow HJ ACKs */
 		sys_write32(sys_read32(config->regs + DEVICE_CTRL) & ~(DEV_CTRL_HOT_JOIN_NACK),
 			    config->regs + DEVICE_CTRL);
 	}
-
-	return 0;
+		
+error_exit:
+#if CONFIG_ALIF_HWSEM
+	irq_disable(I3C_IRQn);
+	hwsem_unlock(hwsem, MASTER_ID);
+#endif
+	return ret;
 }
 
 static DEVICE_API(i3c, dw_i3c_api) = {
