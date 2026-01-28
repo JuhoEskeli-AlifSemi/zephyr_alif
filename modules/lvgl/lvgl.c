@@ -18,6 +18,9 @@
 #endif
 #include LV_STDLIB_INCLUDE
 
+#include <zephyr/drivers/mipi_dsi/dsi_dw.h>
+#include <zephyr/drivers/display/cdc200.h>
+
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(lvgl, CONFIG_LV_Z_LOG_LEVEL);
 
@@ -224,6 +227,8 @@ lv_result_t lv_mem_test_core(void)
 int lvgl_init(void)
 {
 	const struct device *display_dev = DEVICE_DT_GET(DISPLAY_NODE);
+	const struct device *dsi = DEVICE_DT_GET(DT_ALIAS(mipi_dsi));
+    struct cdc200_display_caps cdc200_caps;
 
 	int err = 0;
 
@@ -231,6 +236,21 @@ int lvgl_init(void)
 		LOG_ERR("Display device not ready.");
 		return -ENODEV;
 	}
+
+	if (!device_is_ready(dsi)) {
+		LOG_ERR("DSI device not ready.");
+		return -ENODEV;
+	}
+
+	err = dsi_dw_set_mode(dsi, DSI_DW_VIDEO_MODE);
+	if (err) {
+		LOG_ERR("DSI Host controller set to video mode.");
+		return err;
+	}
+
+	cdc200_set_enable(display_dev, true);
+	cdc200_get_capabilities(display_dev, &cdc200_caps);
+
 
 #if CONFIG_LV_Z_LOG_LEVEL != 0
 	lv_log_register_print_cb(lvgl_log);
@@ -245,6 +265,8 @@ int lvgl_init(void)
 
 	disp_data.display_dev = display_dev;
 	display_get_capabilities(display_dev, &disp_data.cap);
+	
+	disp_data.cap.current_pixel_format = cdc200_caps.layer[0].current_pixel_format;
 
 	display = lv_display_create(disp_data.cap.x_resolution, disp_data.cap.y_resolution);
 	if (!display) {
