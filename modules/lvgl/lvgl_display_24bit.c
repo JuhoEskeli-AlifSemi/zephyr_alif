@@ -24,13 +24,12 @@ void lvgl_flush_cb_24bit(lv_display_t *display, const lv_area_t *area, uint8_t *
 	flush.desc.height = h;
 	flush.buf = (void *)px_map;
 
-	/* LVGL assumes BGR byte ordering, convert to RGB */
-	for (size_t i = 0; i < flush.desc.buf_size; i += 3) {
-		uint8_t tmp = px_map[i];
-
-		px_map[i] = px_map[i + 2];
-		px_map[i + 2] = tmp;
-	}
+	/*
+	 * LVGL stores RGB888 colors in BGR byte order (lv_color_t has blue, green, red fields).
+	 * Most frame buffer displays (like CDC200) also expect BGR byte order, so no conversion
+	 * is needed. SPI-based displays that expect RGB byte order should handle the conversion
+	 * in their driver or use a different pixel format.
+	 */
 
 	lvgl_flush_display(&flush);
 }

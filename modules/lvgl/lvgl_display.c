@@ -10,6 +10,9 @@
 
 #include "lvgl_display.h"
 
+#include <zephyr/logging/log.h>
+LOG_MODULE_REGISTER(lvgl_display, LOG_LEVEL_INF);
+
 #ifdef CONFIG_LV_Z_FLUSH_THREAD
 
 K_SEM_DEFINE(flush_complete, 0, 1);
@@ -72,9 +75,17 @@ int set_lvgl_rendering_cb(lv_display_t *display)
 	int err = 0;
 	struct lvgl_disp_data *data = (struct lvgl_disp_data *)lv_display_get_user_data(display);
 
+	if(data == NULL) {
+		LOG_ERR("LVGL display user data is NULL");
+		return -EINVAL;
+	}
+
 #ifdef CONFIG_LV_Z_FLUSH_THREAD
 	lv_display_set_flush_wait_cb(display, lvgl_wait_cb);
 #endif
+
+	LOG_DBG("Setting LVGL rendering callback for pixel format %d",
+			data->cap.current_pixel_format);
 
 	switch (data->cap.current_pixel_format) {
 	case PIXEL_FORMAT_ARGB_8888:

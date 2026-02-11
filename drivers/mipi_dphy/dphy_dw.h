@@ -253,6 +253,8 @@ struct dphy_dw_data {
 	DEVICE_MMIO_NAMED_RAM(expmst_reg);
 	DEVICE_MMIO_NAMED_RAM(dsi_reg);
 	DEVICE_MMIO_NAMED_RAM(csi_reg);
+
+	bool is_dsi_initialized;
 };
 
 #endif /* _DPHY_DW_H_ */

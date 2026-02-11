@@ -288,11 +288,17 @@ int dphy_dw_master_setup(const struct device *dev, struct dphy_dsi_settings *phy
 	uint32_t bitrate_mbps = (phy->pll_fout / MHZ(1)) << 1;
 	uintptr_t test_ctrl0 = dsi_regs + DSI_PHY_TST_CTRL0;
 	uintptr_t test_ctrl1 = dsi_regs + DSI_PHY_TST_CTRL1;
+	struct dphy_dw_data *data = dev->data;
 	uint8_t cfgclkfreqrange = 0;
 	uint8_t hsfreq = 0;
 	uint32_t tmp = 0;
 	int ret = 0;
 	uint32_t i;
+
+	if (data->is_dsi_initialized) {
+		LOG_DBG("D-PHY Master already setup.");
+		return 0;
+	}
 
 	/* Enable TX-DPHY clock. */
 	ret = clock_control_on(config->clk_dev, config->txdphy_cid);
@@ -489,6 +495,8 @@ int dphy_dw_master_setup(const struct device *dev, struct dphy_dsi_settings *phy
 			sys_read32(dsi_regs + DSI_PHY_STATUS));
 		return -ETIMEDOUT;
 	}
+
+	data->is_dsi_initialized = true;
 
 	return 0;
 }
@@ -830,7 +838,9 @@ static int dphy_dw_init(const struct device *dev)
 		.cfg_clk_frequency = DT_INST_PROP(i, cfg_clk_frequency),                           \
 	};                                                                                         \
                                                                                                    \
-	static struct dphy_dw_data data_##i;                                                       \
+	static struct dphy_dw_data data_##i = {                                                    \
+		.is_dsi_initialized = false,                                                       \
+	};                                                                                         \
                                                                                                    \
 	DEVICE_DT_INST_DEFINE(i, &dphy_dw_init, NULL, &data_##i, &config_##i, POST_KERNEL,         \
 			      CONFIG_MIPI_DPHY_INIT_PRIORITY, NULL);

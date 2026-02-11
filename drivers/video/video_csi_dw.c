@@ -344,8 +344,11 @@ static int csi2_dw_validate_data(const struct device *dev)
 	 */
 	pixclock = ((phy->pll_fin << 1) * phy->num_lanes * CSI2_BANDWIDTH_SCALER) / bpp;
 
-	LOG_DBG("pll_fin - %d, Check pixclock = %d (CSI_PIXCLK_CTRL)", phy->pll_fin,
+	LOG_INF("pll_fin - %d, Check pixclock = %d (CSI_PIXCLK_CTRL)", phy->pll_fin,
 		(uint32_t)pixclock);
+	LOG_INF("num_lanes - %d", phy->num_lanes);
+	LOG_INF("CSI2_BANDWIDTH_SCALER - %f", CSI2_BANDWIDTH_SCALER);
+	LOG_INF("bpp - %d", bpp);
 
 	tmp = (uint32_t)pixclock;
 	ret = clock_control_set_rate(config->clk_dev, config->pixclk,

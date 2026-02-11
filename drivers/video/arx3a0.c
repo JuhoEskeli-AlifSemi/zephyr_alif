@@ -1142,7 +1142,31 @@ static int arx3a0_set_camera_gain(const struct device *dev, uint32_t gain)
 					    0.5f);
 	}
 
-	return resulting_gain;
+	ARG_UNUSED(resulting_gain);
+
+	return 0;
+}
+
+static int arx3a0_get_camera_gain(const struct device *dev, uint32_t *gain)
+{
+	uint32_t digital_gain;
+	uint32_t coarse_gain;
+	uint32_t fine_gain;
+	uint32_t val;
+	int ret;
+
+	ret = arx3a0_read_reg(dev, ARX3A0_GLOBAL_GAIN_REGISTER, 2, &val);
+	if (ret) {
+		return ret;
+	}
+
+	digital_gain = val >> 7;
+	coarse_gain = (val >> 4) & 7;
+	fine_gain = val & 0xf;
+
+	*gain = ((fine_gain + 16) << coarse_gain) * digital_gain * 64;
+
+	return 0;
 }
 
 static int arx3a0_set_ctrl(const struct device *dev, unsigned int cid, void *value)
@@ -1155,12 +1179,23 @@ static int arx3a0_set_ctrl(const struct device *dev, unsigned int cid, void *val
 	}
 }
 
+static int arx3a0_get_ctrl(const struct device *dev, unsigned int cid, void *value)
+{
+	switch (cid) {
+	case VIDEO_CID_GAIN:
+		return arx3a0_get_camera_gain(dev, (uint32_t *)value);
+	default:
+		return -ENOTSUP;
+	}
+}
+
 static DEVICE_API(video, arx3a0_driver_api) = {
 	.set_format = arx3a0_set_fmt,
 	.get_format = arx3a0_get_fmt,
 	.get_caps = arx3a0_get_caps,
 	.set_stream = arx3a0_set_stream,
 	.set_ctrl = arx3a0_set_ctrl,
+	.get_ctrl = arx3a0_get_ctrl,
 };
 
 static int arx3a0_hard_reseten(const struct device *dev)

@@ -12,7 +12,6 @@
 
 #if defined(CONFIG_VIDEO_BUFFER_USE_SHARED_MULTI_HEAP)
 #include <zephyr/multi_heap/shared_multi_heap.h>
-
 #define VIDEO_COMMON_HEAP_ALLOC(align, size, timeout)                                              \
 	shared_multi_heap_aligned_alloc(CONFIG_VIDEO_BUFFER_SMH_ATTRIBUTE, align, size)
 #define VIDEO_COMMON_FREE(block) shared_multi_heap_free(block)
