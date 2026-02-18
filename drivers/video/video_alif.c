@@ -17,7 +17,7 @@
 #include <zephyr/cache.h>
 
 #include <zephyr/logging/log.h>
-LOG_MODULE_REGISTER(CPI, CONFIG_VIDEO_LOG_LEVEL);
+LOG_MODULE_REGISTER(CPI, LOG_LEVEL_DBG);
 
 #define WORKQ_STACK_SIZE 512
 #define WORKQ_PRIORITY   7

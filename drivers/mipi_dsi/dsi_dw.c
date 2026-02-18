@@ -14,7 +14,7 @@
 #include <zephyr/drivers/mipi_dphy/dphy_dw.h>
 #include "dsi_dw.h"
 
-LOG_MODULE_REGISTER(dsi_dw, CONFIG_MIPI_DSI_LOG_LEVEL);
+LOG_MODULE_REGISTER(dsi_dw, LOG_LEVEL_DBG);
 
 /* Utility functions. */
 static int dsi_format_to_bpp(uint8_t color_coding)

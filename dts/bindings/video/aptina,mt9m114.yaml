@@ -7,7 +7,20 @@ description: MT9M114 CMOS video sensor
 
 compatible: "aptina,mt9m114"
 
-include: i2c-device.yaml
+include: [pinctrl-device.yaml, i2c-device.yaml]
+
+properties:
+  reset-gpios:
+    type: phandle-array
+    description: |
+      The RESETn pin is asserted to disable the sensor causing a hard
+      reset.  The sensor receives this as an active-low signal.
+
+  power-gpios:
+    type: phandle-array
+    description: |
+      The Power Pin is asserted to enable the 1.2 V, 1.8 V and 2.7 V signals
+      needed by sensor. The sensor receives this as an active-high signal.
 
 child-binding:
   child-binding:

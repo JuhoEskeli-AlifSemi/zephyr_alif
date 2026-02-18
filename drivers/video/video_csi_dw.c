@@ -15,7 +15,7 @@
 #include <zephyr/drivers/video/video_alif.h>
 
 #include <zephyr/logging/log.h>
-LOG_MODULE_REGISTER(csi2_dw, CONFIG_VIDEO_LOG_LEVEL);
+LOG_MODULE_REGISTER(csi2_dw, LOG_LEVEL_DBG);
 
 static int csi2_is_format_supported(uint32_t fourcc)
 {
