@@ -396,8 +396,10 @@ done:
 		}
 #endif /* defined(CONFIG_POLL) */
 	} else {
-		/* Restart video capture. */
-		hw_cam_start_video_capture(dev);
+		/* Restart video capture if still streaming. */
+		if (data->is_streaming) {
+			hw_cam_start_video_capture(dev);
+		}
 	}
 }
 
@@ -503,10 +505,11 @@ static int alif_cam_stream_start(const struct device *dev)
 		return -EBUSY;
 	}
 
-	if (sys_read32(regs + CAM_CTRL) & CAM_CTRL_BUSY) {
-		LOG_ERR("Can't start stream. Already Capturing!");
-		return -EBUSY;
-	}
+	/*
+	 * No need to poll for CAM_CTRL_BUSY here.
+	 * hw_cam_start_video_capture() does a SW_RESET which
+	 * immediately clears any stale BUSY state.
+	 */
 
 	if (((IS_ENABLED(CONFIG_VIDEO_ALIF_CAM_EXTENDED)) && config->axi_bus_ep) ||
 	    (!IS_ENABLED(CONFIG_VIDEO_ALIF_CAM_EXTENDED))) {
@@ -546,7 +549,6 @@ static int alif_cam_stream_stop(const struct device *dev)
 	const struct video_cam_config *config = dev->config;
 	struct video_cam_data *data = dev->data;
 	uintptr_t regs = DEVICE_MMIO_GET(dev);
-	uint32_t mask;
 	int ret;
 
 	if (!data->is_streaming) {
@@ -554,33 +556,38 @@ static int alif_cam_stream_stop(const struct device *dev)
 		return 0;
 	}
 
-	ret = video_stream_stop(config->endpoint_dev);
-	if (ret) {
-		LOG_ERR("Failed to stop streaming in Pipeline!");
-		return ret;
-	}
+	/*
+	 * Set is_streaming to false early, before disabling interrupts,
+	 * so that any already-queued work handler will not restart capture.
+	 */
+	data->is_streaming = false;
 
-	/* Disable Interrupts. */
+	/* Disable Interrupts first to prevent new STOP ISRs. */
 	hw_disable_interrupts(regs, INTR_VSYNC | INTR_BRESP_ERR | INTR_OUTFIFO_OVERRUN |
 					    INTR_INFIFO_OVERRUN | INTR_STOP);
 
-	/* Stop the Camera sensor to dump image. */
+	/* Cancel any pending work handler that might restart capture. */
+	k_work_cancel(&data->cb_work);
+
+	/*
+	 * Force-reset the CPI controller. Writing 0 to CAM_CTRL is a
+	 * graceful stop that waits for the current frame to finish, but
+	 * if the sensor (via CSI) keeps pushing data at 30fps the BUSY
+	 * flag may never clear. A SW_RESET forces the hardware to idle
+	 * immediately.
+	 */
+	sys_write32(CAM_CTRL_SW_RESET, regs + CAM_CTRL);
 	sys_write32(0, regs + CAM_CTRL);
 
 	/* Set the Current buffer state to NULL */
 	data->curr_vid_buf = 0;
 
-	/*
-	 * Poll on Busy flag of CPI to find out when the video buffer
-	 * is no longer accessed.
-	 */
-	mask = CAM_CTRL_BUSY;
-	for (int i = 0; (i < 20) && (sys_read32(regs + CAM_CTRL) & mask) == mask; i++) {
-		k_msleep(1);
+	ret = video_stream_stop(config->endpoint_dev);
+	if (ret) {
+		LOG_ERR("Failed to stop streaming in Pipeline!");
+		return ret;
 	}
 	LOG_DBG("Stream stopped");
-
-	data->is_streaming = false;
 
 	return 0;
 }

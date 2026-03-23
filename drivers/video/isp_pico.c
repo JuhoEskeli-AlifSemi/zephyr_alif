@@ -99,27 +99,27 @@ static const struct video_format_cap supported_tpg_fmts[] = {
 };
 
 static const struct video_format_cap supported_output_fmts[] = {
-	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_BGGR8, 640, 480),
-	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_GBRG8, 640, 480),
-	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_GRBG8, 640, 480),
-	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_RGGB8, 640, 480),
-	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_BGGR10, 640, 480),
-	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_GBRG10, 640, 480),
-	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_GRBG10, 640, 480),
-	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_RGGB10, 640, 480),
-	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_BGGR12, 640, 480),
-	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_GBRG12, 640, 480),
-	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_GRBG12, 640, 480),
-	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_RGGB12, 640, 480),
-	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_NV12, 640, 480),
-	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_NV16, 640, 480),
-	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_YUV422P, 640, 480),
-	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_YUV420, 640, 480),
-	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_YUYV, 640, 480),
-	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_GREY, 640, 480),
-	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_Y10, 640, 480),
-	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_Y12, 640, 480),
-	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_RGB888_PLANAR_PRIVATE, 640, 480),
+	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_BGGR8, 1920, 1080),
+	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_GBRG8, 1920, 1080),
+	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_GRBG8, 1920, 1080),
+	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_RGGB8, 1920, 1080),
+	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_BGGR10, 1920, 1080),
+	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_GBRG10, 1920, 1080),
+	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_GRBG10, 1920, 1080),
+	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_RGGB10, 1920, 1080),
+	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_BGGR12, 1920, 1080),
+	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_GBRG12, 1920, 1080),
+	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_GRBG12, 1920, 1080),
+	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_RGGB12, 1920, 1080),
+	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_NV12, 1920, 1080),
+	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_NV16, 1920, 1080),
+	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_YUV422P, 1920, 1080),
+	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_YUV420, 1920, 1080),
+	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_YUYV, 1920, 1080),
+	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_GREY, 1920, 1080),
+	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_Y10, 1920, 1080),
+	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_Y12, 1920, 1080),
+	ISP_VIDEO_FORMAT_CAP(VIDEO_PIX_FMT_RGB888_PLANAR_PRIVATE, 1920, 1080),
 	{ 0 },
 };
 
@@ -211,7 +211,8 @@ static void isp_bottom_half(const struct device *dev)
 
 	vbuf = k_fifo_peek_head(&data->fifo_in);
 	if (vbuf == NULL) {
-		LOG_ERR("Unexpected condition! Empty IN-FIFO");
+		LOG_WRN("[ISP-BH] fifo_in empty, stopping. fifo_out has data: %d",
+			!k_fifo_is_empty(&data->fifo_out));
 		data->is_streaming = false;
 		signal_status = VIDEO_BUF_ERROR;
 		goto isp_bottom_done;
@@ -239,8 +240,7 @@ static void isp_bottom_half(const struct device *dev)
 
 	vbuf = k_fifo_peek_head(&data->fifo_in);
 	if (vbuf == NULL) {
-		LOG_DBG("No more empty buffers in the IN-FIFO. "
-			"Stopping video capture. If re-queued, restart stream.");
+		LOG_WRN("[ISP-BH] No more buffers after frame done, stopping");
 		data->is_streaming = false;
 		signal_status = VIDEO_BUF_DONE;
 		goto isp_bottom_done;
@@ -257,8 +257,10 @@ static void isp_bottom_half(const struct device *dev)
 
 isp_bottom_done:
 	if (!data->is_streaming) {
+		LOG_WRN("[ISP-BH] Stopping CAM pipeline");
 		video_stream_stop(config->controller);
 		data->curr_vid_buf = 0;
+		LOG_WRN("[ISP-BH] CAM pipeline stopped");
 	}
 
 	LOG_DBG("current video buffer - 0x%08x", data->curr_vid_buf);
@@ -539,6 +541,10 @@ static int isp_stream_start(const struct device *dev)
 		return -EBUSY;
 	}
 
+	LOG_WRN("[ISP-START] Restarting. fifo_in empty: %d, fifo_out empty: %d",
+		k_fifo_is_empty(&data->fifo_in),
+		k_fifo_is_empty(&data->fifo_out));
+
 	vbuf = k_fifo_peek_head(&data->fifo_in);
 	if (vbuf == NULL) {
 		LOG_ERR("Unexpected condition! Empty IN-FIFO. Can't start streaming!");
@@ -615,7 +621,22 @@ static int isp_stream_start(const struct device *dev)
 		goto dequeue_buf;
 	}
 
-	ret = video_stream_start(config->controller);
+	LOG_WRN("[ISP-START] isp_vsi_start OK, starting CAM...");
+
+	/*
+	 * The CAM may still be shutting down from the ISP bottom-half
+	 * calling video_stream_stop() asynchronously. The is_streaming
+	 * flag is cleared first in alif_cam_stream_stop, so a brief
+	 * retry is enough.
+	 */
+	for (int i = 0; i < 10; i++) {
+		ret = video_stream_start(config->controller);
+		if (ret != -EBUSY) {
+			break;
+		}
+		k_msleep(1);
+	}
+	LOG_WRN("[ISP-START] video_stream_start(CAM) returned %d", ret);
 	if (ret) {
 		LOG_ERR("Failed to start stream for Endpoint device: %s!",
 				config->controller->name);
@@ -626,19 +647,15 @@ static int isp_stream_start(const struct device *dev)
 	return 0;
 
 stop_isp_stream:
-	ret = isp_vsi_stop(&data->init_cfg);
-	if (ret) {
+	if (isp_vsi_stop(&data->init_cfg)) {
 		LOG_ERR("Failed to stop ISP device streaming");
-		return ret;
 	}
 dequeue_buf:
-	ret = isp_vsi_dequeue(&data->init_cfg, &vbuf2);
-	if (ret) {
+	if (isp_vsi_dequeue(&data->init_cfg, &vbuf2)) {
 		LOG_ERR("Failed to dequeue buffer back!");
-		return ret;
 	}
 
-	return 0;
+	return ret;
 }
 
 static int isp_stream_stop(const struct device *dev)
