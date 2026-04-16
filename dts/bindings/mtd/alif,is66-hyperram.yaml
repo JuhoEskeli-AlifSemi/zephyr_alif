@@ -1,0 +1,43 @@
+# Copyright (c) 2025 Alif Semiconductor
+#
+# SPDX-License-Identifier: Apache-2.0
+
+description: ISSI IS66 HyperRAM on ALIF OSPI (HyperBus) bus
+
+compatible: "alif,is66-hyperram"
+
+include: base.yaml
+
+properties:
+  size:
+    type: int
+    required: true
+    description: |
+      The RAM size in bytes.
+
+  wait-cycles:
+    type: int
+    enum:
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+    required: true
+    description: |
+      HyperRAM initial access latency (wait cycles). Must match operating
+      frequency per IS66 datasheet:
+      | Wait cycles | Max CLK (MHz) |
+      | ----------- | ------------- |
+      | 3           | 83            |
+      | 4           | 100           |
+      | 5           | 133           |
+      | 6           | 166           |
+      | 7           | 200           |
+
+  reset-gpios:
+    type: phandle-array
+    description: |
+      Optional GPIO connected to the HyperRAM nRST pin.
+      If provided, the driver will assert a hardware reset pulse
+      before initializing the controller.

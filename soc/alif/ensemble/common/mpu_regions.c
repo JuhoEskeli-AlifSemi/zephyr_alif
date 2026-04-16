@@ -24,6 +24,7 @@
 	.r_limit = REGION_LIMIT_ADDR(base, size),  \
 }
 
+
 #define MRAM_SECTOR_SIZE		DT_PROP(DT_NODELABEL(mram_storage), erase_block_size)
 
 #define MRAM_BOOT_PARTITION_ADDR	DT_FIXED_PARTITION_ADDR(DT_NODELABEL(boot_partition))
@@ -121,6 +122,20 @@ static const struct arm_mpu_region mpu_regions[] = {
 	MPU_REGION_ENTRY("OSPI1_XIP", ALIF_ENSEMBLE_OSPI1_XIP_BASE,
 			 REGION_OSPI_FLASH_ATTR(ALIF_ENSEMBLE_OSPI1_XIP_BASE,
 							ALIF_ENSEMBLE_OSPI1_XIP_SIZE)),
+#if DT_NODE_HAS_STATUS(DT_NODELABEL(ospi0), okay)
+	/* Region 9: OSPI0 XIP as Normal Non-Cacheable (HyperRAM on E7/E3/E5).
+	 * E7 OSPI HyperBus XIP write path does NOT support hardcoded DFS
+	 * (SOC_FEAT_AES_OSPI_HAS_XIP_WRITE_HC_DFS=0).  If this region is mapped
+	 * as WB/RA/WA, D-cache dirty-line evictions trigger 32-byte AXI writes to
+	 * the XIP write controller, which misaligns data in IS66 (observed as a
+	 * 7-byte offset per cache line).  Normal Non-Cacheable prevents D-cache
+	 * from allocating cache lines here, so writes go directly to AXI without
+	 * any cache involvement.  Single-word reads also work without bursts.
+	 * Ref: Alif CMSIS-DFP demo_hyperram_e7.c — writes must use Device mode. */
+	MPU_REGION_ENTRY("OSPI0_XIP", ALIF_ENSEMBLE_OSPI0_XIP_BASE,
+			 REGION_RAM_NOCACHE_ATTR(ALIF_ENSEMBLE_OSPI0_XIP_BASE,
+						ALIF_ENSEMBLE_OSPI0_XIP_SIZE)),
+#endif
 #endif
 };
 

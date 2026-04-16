@@ -18,4 +18,14 @@ config MEMC_ALIF_OSPI_APS512XXN
 	help
 	  Enable support for the AP-Memory APS512XXN PSRAM device on Alif platforms.
 
+config MEMC_ALIF_OSPI_IS66_HYPERRAM
+	bool "ALIF OSPI ISSI IS66 HyperRAM driver"
+	default y
+	depends on DT_HAS_ALIF_IS66_HYPERRAM_ENABLED
+	help
+	  Enable support for the ISSI IS66WVH HyperRAM device on Alif platforms.
+	  The device is accessed via HyperBus XIP on the OSPI0 controller.
+	  Note: All writes to the XIP region must be 16-bit or 32-bit aligned;
+	  byte writes are not supported by the HyperBus protocol.
+
 endif
