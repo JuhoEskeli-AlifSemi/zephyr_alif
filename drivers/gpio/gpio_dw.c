@@ -430,7 +430,8 @@ struct gpio_dw_isr_param {
 	uint32_t pin;
 };
 
-static void gpio_dw_isr(const void *arg)
+/* Per-pin ISR: used when each pin has its own NVIC line */
+static void gpio_dw_isr_pin(const void *arg)
 {
 	const struct gpio_dw_isr_param *param = arg;
 	const struct device *port = param->dev;
@@ -446,6 +447,24 @@ static void gpio_dw_isr(const void *arg)
 	dw_write(base_addr, PORTA_EOI, pin_bit);
 
 	gpio_fire_callbacks(&context->callbacks, port, pin_bit);
+}
+
+/* Shared ISR: used when all pins share a single NVIC line */
+static void gpio_dw_isr_shared(const struct device *port)
+{
+	struct gpio_dw_runtime *context = port->data;
+	uint32_t base_addr = dw_base_to_block_base(context->base_addr);
+	uint32_t int_status;
+
+	int_status = dw_read(base_addr, INTSTATUS);
+	int_status &= context->owned_pins;
+	if (!int_status) {
+		return;
+	}
+
+	dw_write(base_addr, PORTA_EOI, int_status);
+
+	gpio_fire_callbacks(&context->callbacks, port, int_status);
 }
 
 #else
@@ -514,13 +533,26 @@ static int gpio_dw_initialize(const struct device *port)
 #define INST_IRQ_FLAGS(n) COND_CODE_1(DT_INST_IRQ_HAS_CELL(n, flags), (DT_INST_IRQ(n, flags)), (0))
 
 #ifdef CONFIG_GPIO_DW_MULTICORE
-/* In multi-core mode, each pin gets its own ISR param; enable per-pin lazily */
-#define GPIO_CFG_IRQ(idx, n)                                                                       \
+/*
+ * Multi-core IRQ setup: per-pin ISR params when each pin has its own IRQ,
+ * shared ISR when all pins share a single IRQ line.
+ */
+#define GPIO_CFG_IRQ_PIN(idx, n)                                                                   \
 	IRQ_CONNECT(DT_INST_IRQN_BY_IDX(n, idx), DT_INST_IRQ_BY_IDX(n, idx, priority),             \
-		    gpio_dw_isr, &gpio_isr_params_##n[idx], INST_IRQ_FLAGS(n));
+		    gpio_dw_isr_pin, &gpio_isr_params_##n[idx], INST_IRQ_FLAGS(n));
+
+#define GPIO_CFG_IRQ_SHARED(idx, n)                                                                \
+	IRQ_CONNECT(DT_INST_IRQN_BY_IDX(n, idx), DT_INST_IRQ_BY_IDX(n, idx, priority),             \
+		    gpio_dw_isr_shared, DEVICE_DT_INST_GET(n), INST_IRQ_FLAGS(n));
 
 #define GPIO_ISR_PARAM_ENTRY(idx, n) \
 	{ .dev = DEVICE_DT_INST_GET(n), .pin = idx }
+
+/* Select per-pin or shared based on whether ngpios == num_irqs */
+#define GPIO_CFG_IRQ(idx, n)                                                                       \
+	COND_CODE_1(UTIL_BOOL(DT_INST_IRQ_HAS_IDX(n, 1)),                                         \
+		(GPIO_CFG_IRQ_PIN(idx, n)),                                                         \
+		(GPIO_CFG_IRQ_SHARED(idx, n)))
 
 #else
 #define GPIO_CFG_IRQ(idx, n)                                                                       \
@@ -532,9 +564,12 @@ static int gpio_dw_initialize(const struct device *port)
 
 #define GPIO_DW_INIT(n)                                                                            \
 	IF_ENABLED(CONFIG_GPIO_DW_MULTICORE, (                                                     \
-		static const struct gpio_dw_isr_param gpio_isr_params_##n[] = {                        \
-			LISTIFY(DT_NUM_IRQS(DT_DRV_INST(n)), GPIO_ISR_PARAM_ENTRY, (,), n)             \
-		};                                                                                 \
+		COND_CODE_1(UTIL_BOOL(DT_INST_IRQ_HAS_IDX(n, 1)),                                    \
+			(static const struct gpio_dw_isr_param gpio_isr_params_##n[] = {                \
+				LISTIFY(DT_NUM_IRQS(DT_DRV_INST(n)),                                   \
+					GPIO_ISR_PARAM_ENTRY, (,), n)                                   \
+			};),                                                                           \
+			(/* single-IRQ port: no per-pin params needed */))                               \
 	))                                                                                         \
 	static void gpio_config_##n##_irq(const struct device *port)                               \
 	{                                                                                          \
