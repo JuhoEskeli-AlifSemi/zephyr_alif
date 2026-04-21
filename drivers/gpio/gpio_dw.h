@@ -30,6 +30,9 @@ struct gpio_dw_config {
 #ifdef CONFIG_PINCTRL
 	const struct pinctrl_dev_config *pcfg;
 #endif
+#ifdef CONFIG_GPIO_DW_MULTICORE
+	uint32_t ack_pin_mask; /* from DTS: pins this core acknowledges */
+#endif
 };
 
 struct gpio_dw_runtime {
@@ -37,6 +40,10 @@ struct gpio_dw_runtime {
 	struct gpio_driver_data common;
 	uint32_t base_addr;
 	sys_slist_t callbacks;
+#ifdef CONFIG_GPIO_DW_MULTICORE
+	uint32_t owned_pins;
+	uint32_t ack_pins;
+#endif
 };
 
 #ifdef __cplusplus

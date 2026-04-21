@@ -22,13 +22,44 @@
 #include <zephyr/drivers/clock_control.h>
 #include <zephyr/irq.h>
 
+#ifdef CONFIG_GPIO_DW_MULTICORE
+#include <zephyr/drivers/hwsem_ipm.h>
+
+#if defined(CONFIG_RTSS_HE)
+#define GPIO_DW_HWSEM_MASTER_ID 1
+#elif defined(CONFIG_RTSS_HP)
+#define GPIO_DW_HWSEM_MASTER_ID 2
+#else
+#error "GPIO_DW_MULTICORE requires CONFIG_RTSS_HE or CONFIG_RTSS_HP"
+#endif
+
+#if DT_NODE_HAS_STATUS(DT_NODELABEL(hwsem0), okay)
+static const struct device *const gpio_dw_hwsem = DEVICE_DT_GET(DT_NODELABEL(hwsem0));
+#else
+static const struct device *const gpio_dw_hwsem;
+#endif
+
+static inline void gpio_dw_lock(void)
+{
+	if (device_is_ready(gpio_dw_hwsem)) {
+		hwsem_lock(gpio_dw_hwsem, GPIO_DW_HWSEM_MASTER_ID);
+	}
+}
+
+static inline void gpio_dw_unlock(void)
+{
+	if (device_is_ready(gpio_dw_hwsem)) {
+		hwsem_unlock(gpio_dw_hwsem, GPIO_DW_HWSEM_MASTER_ID);
+	}
+}
+#endif /* CONFIG_GPIO_DW_MULTICORE */
+
 #ifdef CONFIG_IOAPIC
 #include <zephyr/drivers/interrupt_controller/ioapic.h>
 #endif
 
 static int gpio_dw_port_set_bits_raw(const struct device *port, uint32_t mask);
-static int gpio_dw_port_clear_bits_raw(const struct device *port,
-				       uint32_t mask);
+static int gpio_dw_port_clear_bits_raw(const struct device *port, uint32_t mask);
 
 /*
  * ARC architecture configure IP through IO auxiliary registers.
@@ -40,14 +71,12 @@ static inline uint32_t dw_read(uint32_t base_addr, uint32_t offset)
 	return sys_in32(base_addr + offset);
 }
 
-static inline void dw_write(uint32_t base_addr, uint32_t offset,
-			    uint32_t val)
+static inline void dw_write(uint32_t base_addr, uint32_t offset, uint32_t val)
 {
 	sys_out32(val, base_addr + offset);
 }
 
-static void dw_set_bit(uint32_t base_addr, uint32_t offset,
-		       uint32_t bit, bool value)
+static void dw_set_bit(uint32_t base_addr, uint32_t offset, uint32_t bit, bool value)
 {
 	if (!value) {
 		sys_io_clear_bit(base_addr + offset, bit);
@@ -61,14 +90,12 @@ static inline uint32_t dw_read(uint32_t base_addr, uint32_t offset)
 	return sys_read32(base_addr + offset);
 }
 
-static inline void dw_write(uint32_t base_addr, uint32_t offset,
-			    uint32_t val)
+static inline void dw_write(uint32_t base_addr, uint32_t offset, uint32_t val)
 {
 	sys_write32(val, base_addr + offset);
 }
 
-static void dw_set_bit(uint32_t base_addr, uint32_t offset,
-		       uint32_t bit, bool value)
+static void dw_set_bit(uint32_t base_addr, uint32_t offset, uint32_t bit, bool value)
 {
 	if (!value) {
 		sys_clear_bit(base_addr + offset, bit);
@@ -166,10 +193,8 @@ static inline uint32_t dw_get_dir_port(uint32_t base_addr)
 	return ddr_port;
 }
 
-static int gpio_dw_pin_interrupt_configure(const struct device *port,
-					   gpio_pin_t pin,
-					   enum gpio_int_mode mode,
-					   enum gpio_int_trig trig)
+static int gpio_dw_pin_interrupt_configure(const struct device *port, gpio_pin_t pin,
+					   enum gpio_int_mode mode, enum gpio_int_trig trig)
 {
 	struct gpio_dw_runtime *context = port->data;
 	const struct gpio_dw_config *config = port->config;
@@ -202,6 +227,10 @@ static int gpio_dw_pin_interrupt_configure(const struct device *port,
 		}
 	}
 
+#ifdef CONFIG_GPIO_DW_MULTICORE
+	gpio_dw_lock();
+#endif
+
 	/* Clear interrupt enable */
 	dw_set_bit(base_addr, INTEN, pin, false);
 
@@ -210,18 +239,15 @@ static int gpio_dw_pin_interrupt_configure(const struct device *port,
 	dw_write(base_addr, PORTA_EOI, BIT(pin));
 
 	if (mode != GPIO_INT_MODE_DISABLED) {
-		if ((mode == GPIO_INT_MODE_EDGE) &&
-		    (trig == GPIO_INT_TRIG_BOTH)) {
+		if ((mode == GPIO_INT_MODE_EDGE) && (trig == GPIO_INT_TRIG_BOTH)) {
 			/* enable interrupt for both edge. */
 			dw_set_bit(base_addr, INT_BOTHEDGE, pin, 1);
 		} else {
 			/* level (0) or edge (1) */
-			dw_set_bit(base_addr, INTTYPE_LEVEL, pin,
-				   (mode == GPIO_INT_MODE_EDGE));
+			dw_set_bit(base_addr, INTTYPE_LEVEL, pin, (mode == GPIO_INT_MODE_EDGE));
 
 			/* Active low/high */
-			dw_set_bit(base_addr, INT_POLARITY, pin,
-				   (trig == GPIO_INT_TRIG_HIGH));
+			dw_set_bit(base_addr, INT_POLARITY, pin, (trig == GPIO_INT_TRIG_HIGH));
 
 			if (IS_ENABLED(CONFIG_ENSEMBLE_GEN2)) { /* ENSEMBLE_GEN2 SoC */
 				/* default enable debounce when using interrupts. */
@@ -232,13 +258,30 @@ static int gpio_dw_pin_interrupt_configure(const struct device *port,
 		/* Finally enabling interrupt */
 		dw_set_bit(base_addr, INTEN, pin, true);
 		dw_set_bit(base_addr, INTMASK, pin, false);
+
+#ifdef CONFIG_GPIO_DW_MULTICORE
+		context->owned_pins |= BIT(pin);
+		if (config->ack_pin_mask & BIT(pin)) {
+			context->ack_pins |= BIT(pin);
+		}
+		irq_enable(config->irq_num + pin);
+#endif
+	} else {
+#ifdef CONFIG_GPIO_DW_MULTICORE
+		context->owned_pins &= ~BIT(pin);
+		context->ack_pins &= ~BIT(pin);
+		irq_disable(config->irq_num + pin);
+#endif
 	}
+
+#ifdef CONFIG_GPIO_DW_MULTICORE
+	gpio_dw_unlock();
+#endif
 
 	return 0;
 }
 
-static inline void dw_pin_config(const struct device *port,
-				 uint32_t pin, int flags)
+static inline void dw_pin_config(const struct device *port, uint32_t pin, int flags)
 {
 	struct gpio_dw_runtime *context = port->data;
 	const struct gpio_dw_config *config = port->config;
@@ -270,9 +313,7 @@ static inline void dw_pin_config(const struct device *port,
 	}
 }
 
-static inline int gpio_dw_config(const struct device *port,
-				 gpio_pin_t pin,
-				 gpio_flags_t flags)
+static inline int gpio_dw_config(const struct device *port, gpio_pin_t pin, gpio_flags_t flags)
 {
 	const struct gpio_dw_config *config = port->config;
 	uint32_t io_flags;
@@ -286,8 +327,7 @@ static inline int gpio_dw_config(const struct device *port,
 	 * not supporting both input/output at same time.
 	 */
 	io_flags = flags & (GPIO_INPUT | GPIO_OUTPUT);
-	if ((io_flags == GPIO_DISCONNECTED)
-	    || (io_flags == (GPIO_INPUT | GPIO_OUTPUT))) {
+	if ((io_flags == GPIO_DISCONNECTED) || (io_flags == (GPIO_INPUT | GPIO_OUTPUT))) {
 		return -ENOTSUP;
 	}
 
@@ -318,8 +358,7 @@ static int gpio_dw_port_get_raw(const struct device *port, uint32_t *value)
 	return 0;
 }
 
-static int gpio_dw_port_set_masked_raw(const struct device *port,
-				       uint32_t mask, uint32_t value)
+static int gpio_dw_port_set_masked_raw(const struct device *port, uint32_t mask, uint32_t value)
 {
 	struct gpio_dw_runtime *context = port->data;
 	uint32_t base_addr = dw_base_to_block_base(context->base_addr);
@@ -349,8 +388,7 @@ static int gpio_dw_port_set_bits_raw(const struct device *port, uint32_t mask)
 	return 0;
 }
 
-static int gpio_dw_port_clear_bits_raw(const struct device *port,
-				       uint32_t mask)
+static int gpio_dw_port_clear_bits_raw(const struct device *port, uint32_t mask)
 {
 	struct gpio_dw_runtime *context = port->data;
 	uint32_t base_addr = dw_base_to_block_base(context->base_addr);
@@ -380,8 +418,7 @@ static int gpio_dw_port_toggle_bits(const struct device *port, uint32_t mask)
 	return 0;
 }
 
-static inline int gpio_dw_manage_callback(const struct device *port,
-					  struct gpio_callback *callback,
+static inline int gpio_dw_manage_callback(const struct device *port, struct gpio_callback *callback,
 					  bool set)
 {
 	struct gpio_dw_runtime *context = port->data;
@@ -393,12 +430,45 @@ static inline int gpio_dw_manage_callback(const struct device *port,
 static void gpio_dw_isr(const struct device *port)
 {
 	struct gpio_dw_runtime *context = port->data;
+	const struct gpio_dw_config *config = port->config;
 	uint32_t base_addr = dw_base_to_block_base(context->base_addr);
 	uint32_t int_status;
 
 	int_status = dw_read(base_addr, INTSTATUS);
 
+#ifdef CONFIG_GPIO_DW_MULTICORE
+	/*
+	 * Derive which pin triggered this ISR from the active IRQ number.
+	 * Each pin has its own IRQ line, and the NVIC latches the pending
+	 * interrupt independently of INTSTATUS. This matters for shared
+	 * pins where the acknowledging core may have already cleared
+	 * INTSTATUS via PORTA_EOI by the time we read it.
+	 */
+	uint32_t active_irq = __get_IPSR() - 16;
+	uint32_t isr_pin = active_irq - config->irq_num;
+	uint32_t isr_pin_bit = BIT(isr_pin);
+
+	/* For non-ack shared pins, INTSTATUS may already be cleared */
+	if ((isr_pin_bit & context->owned_pins) &&
+	    !(isr_pin_bit & context->ack_pins) &&
+	    !(int_status & isr_pin_bit)) {
+		int_status |= isr_pin_bit;
+	}
+
+	/* Only handle interrupts for pins owned by this core */
+	int_status &= context->owned_pins;
+	if (!int_status) {
+		return;
+	}
+
+	/* Only EOI pins this core is responsible for acknowledging */
+	uint32_t eoi_status = int_status & context->ack_pins;
+	if (eoi_status) {
+		dw_write(base_addr, PORTA_EOI, eoi_status);
+	}
+#else
 	dw_write(base_addr, PORTA_EOI, int_status);
+#endif
 
 	gpio_fire_callbacks(&context->callbacks, port, int_status);
 }
@@ -429,10 +499,12 @@ static int gpio_dw_initialize(const struct device *port)
 		/* interrupts in sync with system clock */
 		dw_set_bit(base_addr, INT_CLOCK_SYNC, LS_SYNC_POS, 1);
 
+#ifndef CONFIG_GPIO_DW_MULTICORE
 		/* mask and disable interrupts */
 		dw_write(base_addr, INTMASK, ~(0));
 		dw_write(base_addr, INTEN, 0);
 		dw_write(base_addr, PORTA_EOI, ~(0));
+#endif
 
 		config->config_func(port);
 	}
@@ -447,42 +519,62 @@ static int gpio_dw_initialize(const struct device *port)
 }
 
 /* Bindings to the platform */
-#define INST_IRQ_FLAGS(n) \
-	COND_CODE_1(DT_INST_IRQ_HAS_CELL(n, flags), (DT_INST_IRQ(n, flags)), (0))
+#define INST_IRQ_FLAGS(n) COND_CODE_1(DT_INST_IRQ_HAS_CELL(n, flags), (DT_INST_IRQ(n, flags)), (0))
 
-#define GPIO_CFG_IRQ(idx, n)									\
-		IRQ_CONNECT(DT_INST_IRQN_BY_IDX(n, idx),					\
-			    DT_INST_IRQ_BY_IDX(n, idx, priority), gpio_dw_isr,			\
-			    DEVICE_DT_INST_GET(n), INST_IRQ_FLAGS(n));				\
-		irq_enable(DT_INST_IRQN_BY_IDX(n, idx));					\
+#ifdef CONFIG_GPIO_DW_MULTICORE
+/* In multi-core mode, only connect IRQs at init; enable per-pin lazily */
+#define GPIO_CFG_IRQ(idx, n)                                                                       \
+	IRQ_CONNECT(DT_INST_IRQN_BY_IDX(n, idx), DT_INST_IRQ_BY_IDX(n, idx, priority),             \
+		    gpio_dw_isr, DEVICE_DT_INST_GET(n), INST_IRQ_FLAGS(n));
 
-#define GPIO_DW_INIT(n)										\
-	static void gpio_config_##n##_irq(const struct device *port)				\
-	{											\
-		ARG_UNUSED(port);			                                        \
-		LISTIFY(DT_NUM_IRQS(DT_DRV_INST(n)), GPIO_CFG_IRQ, (), n)                       \
-	}											\
-												\
+#else
+#define GPIO_CFG_IRQ(idx, n)                                                                       \
+	IRQ_CONNECT(DT_INST_IRQN_BY_IDX(n, idx), DT_INST_IRQ_BY_IDX(n, idx, priority),             \
+		    gpio_dw_isr, DEVICE_DT_INST_GET(n), INST_IRQ_FLAGS(n));                        \
+	irq_enable(DT_INST_IRQN_BY_IDX(n, idx));
+
+#endif
+
+#ifdef CONFIG_GPIO_DW_MULTICORE
+/* Convert DTS pin-number array to a bitmask at compile time */
+#define _GPIO_DW_ACK_PIN_BIT(node_id, prop, idx) \
+	BIT(DT_PROP_BY_IDX(node_id, prop, idx))
+
+#define GPIO_DW_ACK_PIN_MASK(n) \
+	COND_CODE_1(DT_INST_NODE_HAS_PROP(n, multicore_ack_pins), \
+		(DT_INST_FOREACH_PROP_ELEM_SEP(n, multicore_ack_pins, \
+			_GPIO_DW_ACK_PIN_BIT, (|))), (0))
+#endif
+
+#define GPIO_DW_INIT(n)                                                                            \
+	static void gpio_config_##n##_irq(const struct device *port)                               \
+	{                                                                                          \
+		ARG_UNUSED(port);                                                                  \
+		LISTIFY(DT_NUM_IRQS(DT_DRV_INST(n)), GPIO_CFG_IRQ, (), n)                                                                            \
+	}                                                                                          \
+                                                                                                   \
 	IF_ENABLED(DT_INST_NODE_HAS_PROP(n, pinctrl_0),						\
-			(PINCTRL_DT_INST_DEFINE(n)));						\
-												\
-	static const struct gpio_dw_config gpio_dw_config_##n = {				\
-		.common = {									\
-			.port_pin_mask = GPIO_PORT_PIN_MASK_FROM_DT_INST(n),			\
-		},										\
-		.irq_num = COND_CODE_1(DT_INST_IRQ_HAS_IDX(n, 0), (DT_INST_IRQN(n)), (0)),	\
-		.ngpios = DT_INST_PROP(n, ngpios),						\
-		.config_func = gpio_config_##n##_irq,						\
-		IF_ENABLED(DT_INST_NODE_HAS_PROP(n, pinctrl_0),					\
-		(.pcfg = PINCTRL_DT_DEV_CONFIG_GET(DT_DRV_INST(n)),))				\
-	};											\
-												\
-	static struct gpio_dw_runtime gpio_##n##_runtime = {					\
-		.base_addr = DT_INST_REG_ADDR(n),						\
-	};											\
-												\
-	DEVICE_DT_INST_DEFINE(n, gpio_dw_initialize, NULL, &gpio_##n##_runtime,			\
-		      &gpio_dw_config_##n, PRE_KERNEL_1,					\
-		      CONFIG_GPIO_INIT_PRIORITY, &api_funcs);					\
+			(PINCTRL_DT_INST_DEFINE(n)));                \
+                                                                                                   \
+	static const struct gpio_dw_config gpio_dw_config_##n = {                                  \
+		.common =                                                                          \
+			{                                                                          \
+				.port_pin_mask = GPIO_PORT_PIN_MASK_FROM_DT_INST(n),               \
+			},                                                                         \
+		.irq_num = COND_CODE_1(DT_INST_IRQ_HAS_IDX(n, 0), (DT_INST_IRQN(n)), (0)), .ngpios = DT_INST_PROP(n, ngpios),                 \
+			 .config_func = gpio_config_##n##_irq,                                     \
+			 IF_ENABLED(DT_INST_NODE_HAS_PROP(n, pinctrl_0),					\
+		(.pcfg = PINCTRL_DT_DEV_CONFIG_GET(DT_DRV_INST(n)),))                               \
+		IF_ENABLED(CONFIG_GPIO_DW_MULTICORE, (                                             \
+			.ack_pin_mask = GPIO_DW_ACK_PIN_MASK(n),))               \
+	};            \
+                                                                                                   \
+	static struct gpio_dw_runtime gpio_##n##_runtime = {                                       \
+		.base_addr = DT_INST_REG_ADDR(n),                                                  \
+	};                                                                                         \
+                                                                                                   \
+	DEVICE_DT_INST_DEFINE(n, gpio_dw_initialize, NULL, &gpio_##n##_runtime,                    \
+			      &gpio_dw_config_##n, PRE_KERNEL_1, CONFIG_GPIO_INIT_PRIORITY,        \
+			      &api_funcs);
 
 DT_INST_FOREACH_STATUS_OKAY(GPIO_DW_INIT)
