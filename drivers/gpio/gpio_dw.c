@@ -423,42 +423,47 @@ static inline int gpio_dw_manage_callback(const struct device *port, struct gpio
 }
 
 #if DT_ANY_INST_HAS_PROP_STATUS_OKAY(interrupts)
+#ifdef CONFIG_GPIO_DW_MULTICORE
+
+struct gpio_dw_isr_param {
+	const struct device *dev;
+	uint32_t pin;
+};
+
+static void gpio_dw_isr(const void *arg)
+{
+	const struct gpio_dw_isr_param *param = arg;
+	const struct device *port = param->dev;
+	struct gpio_dw_runtime *context = port->data;
+	uint32_t base_addr = dw_base_to_block_base(context->base_addr);
+	uint32_t pin_bit = BIT(param->pin);
+
+	if (!(pin_bit & context->owned_pins)) {
+		return;
+	}
+
+	/* PORTA_EOI is write-1-to-clear; harmless if already cleared */
+	dw_write(base_addr, PORTA_EOI, pin_bit);
+
+	gpio_fire_callbacks(&context->callbacks, port, pin_bit);
+}
+
+#else
+
 static void gpio_dw_isr(const struct device *port)
 {
 	struct gpio_dw_runtime *context = port->data;
-	const struct gpio_dw_config *config = port->config;
 	uint32_t base_addr = dw_base_to_block_base(context->base_addr);
 	uint32_t int_status;
 
 	int_status = dw_read(base_addr, INTSTATUS);
 
-#ifdef CONFIG_GPIO_DW_MULTICORE
-	/*
-	 * Derive which pin triggered this ISR from the active IRQ number.
-	 * Each pin has its own NVIC line, so __get_IPSR() tells us exactly
-	 * which pin fired, even if the other core already wrote PORTA_EOI
-	 * and cleared INTSTATUS before we got here.
-	 */
-	uint32_t active_irq = __get_IPSR() - 16;
-	uint32_t isr_pin = active_irq - config->irq_num;
-	uint32_t isr_pin_bit = BIT(isr_pin);
-
-	if ((isr_pin_bit & context->owned_pins) && !(int_status & isr_pin_bit)) {
-		int_status |= isr_pin_bit;
-	}
-
-	/* Only handle interrupts for pins owned by this core */
-	int_status &= context->owned_pins;
-	if (!int_status) {
-		return;
-	}
-#endif
-
-	/* PORTA_EOI is write-1-to-clear; harmless if already cleared */
 	dw_write(base_addr, PORTA_EOI, int_status);
 
 	gpio_fire_callbacks(&context->callbacks, port, int_status);
 }
+
+#endif
 #endif /* DT_ANY_INST_HAS_PROP_STATUS_OKAY(interrupts) */
 
 static DEVICE_API(gpio, api_funcs) = {
@@ -509,10 +514,13 @@ static int gpio_dw_initialize(const struct device *port)
 #define INST_IRQ_FLAGS(n) COND_CODE_1(DT_INST_IRQ_HAS_CELL(n, flags), (DT_INST_IRQ(n, flags)), (0))
 
 #ifdef CONFIG_GPIO_DW_MULTICORE
-/* In multi-core mode, only connect IRQs at init; enable per-pin lazily */
+/* In multi-core mode, each pin gets its own ISR param; enable per-pin lazily */
 #define GPIO_CFG_IRQ(idx, n)                                                                       \
 	IRQ_CONNECT(DT_INST_IRQN_BY_IDX(n, idx), DT_INST_IRQ_BY_IDX(n, idx, priority),             \
-		    gpio_dw_isr, DEVICE_DT_INST_GET(n), INST_IRQ_FLAGS(n));
+		    gpio_dw_isr, &gpio_isr_params_##n[idx], INST_IRQ_FLAGS(n));
+
+#define GPIO_ISR_PARAM_ENTRY(idx, n) \
+	{ .dev = DEVICE_DT_INST_GET(n), .pin = idx }
 
 #else
 #define GPIO_CFG_IRQ(idx, n)                                                                       \
@@ -523,6 +531,11 @@ static int gpio_dw_initialize(const struct device *port)
 #endif
 
 #define GPIO_DW_INIT(n)                                                                            \
+	IF_ENABLED(CONFIG_GPIO_DW_MULTICORE, (                                                     \
+		static const struct gpio_dw_isr_param gpio_isr_params_##n[] = {                        \
+			LISTIFY(DT_NUM_IRQS(DT_DRV_INST(n)), GPIO_ISR_PARAM_ENTRY, (,), n)             \
+		};                                                                                 \
+	))                                                                                         \
 	static void gpio_config_##n##_irq(const struct device *port)                               \
 	{                                                                                          \
 		ARG_UNUSED(port);                                                                  \
