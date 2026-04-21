@@ -11,16 +11,6 @@ properties:
   reg:
     required: true
 
-  multicore-ack-pins:
-    type: array
-    description: |
-      List of pin numbers for which this core is responsible for
-      acknowledging (PORTA_EOI) the GPIO interrupt. Used when
-      multiple cores share the same GPIO controller. Pins not
-      in this list but still enabled for interrupts will rely
-      on the NVIC latch and let the other core acknowledge.
-      Only meaningful when CONFIG_GPIO_DW_MULTICORE is enabled.
-
   "#gpio-cells":
     const: 2
 

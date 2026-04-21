@@ -261,15 +261,11 @@ static int gpio_dw_pin_interrupt_configure(const struct device *port, gpio_pin_t
 
 #ifdef CONFIG_GPIO_DW_MULTICORE
 		context->owned_pins |= BIT(pin);
-		if (config->ack_pin_mask & BIT(pin)) {
-			context->ack_pins |= BIT(pin);
-		}
 		irq_enable(config->irq_num + pin);
 #endif
 	} else {
 #ifdef CONFIG_GPIO_DW_MULTICORE
 		context->owned_pins &= ~BIT(pin);
-		context->ack_pins &= ~BIT(pin);
 		irq_disable(config->irq_num + pin);
 #endif
 	}
@@ -439,19 +435,15 @@ static void gpio_dw_isr(const struct device *port)
 #ifdef CONFIG_GPIO_DW_MULTICORE
 	/*
 	 * Derive which pin triggered this ISR from the active IRQ number.
-	 * Each pin has its own IRQ line, and the NVIC latches the pending
-	 * interrupt independently of INTSTATUS. This matters for shared
-	 * pins where the acknowledging core may have already cleared
-	 * INTSTATUS via PORTA_EOI by the time we read it.
+	 * Each pin has its own NVIC line, so __get_IPSR() tells us exactly
+	 * which pin fired, even if the other core already wrote PORTA_EOI
+	 * and cleared INTSTATUS before we got here.
 	 */
 	uint32_t active_irq = __get_IPSR() - 16;
 	uint32_t isr_pin = active_irq - config->irq_num;
 	uint32_t isr_pin_bit = BIT(isr_pin);
 
-	/* For non-ack shared pins, INTSTATUS may already be cleared */
-	if ((isr_pin_bit & context->owned_pins) &&
-	    !(isr_pin_bit & context->ack_pins) &&
-	    !(int_status & isr_pin_bit)) {
+	if ((isr_pin_bit & context->owned_pins) && !(int_status & isr_pin_bit)) {
 		int_status |= isr_pin_bit;
 	}
 
@@ -460,15 +452,10 @@ static void gpio_dw_isr(const struct device *port)
 	if (!int_status) {
 		return;
 	}
-
-	/* Only EOI pins this core is responsible for acknowledging */
-	uint32_t eoi_status = int_status & context->ack_pins;
-	if (eoi_status) {
-		dw_write(base_addr, PORTA_EOI, eoi_status);
-	}
-#else
-	dw_write(base_addr, PORTA_EOI, int_status);
 #endif
+
+	/* PORTA_EOI is write-1-to-clear; harmless if already cleared */
+	dw_write(base_addr, PORTA_EOI, int_status);
 
 	gpio_fire_callbacks(&context->callbacks, port, int_status);
 }
@@ -535,17 +522,6 @@ static int gpio_dw_initialize(const struct device *port)
 
 #endif
 
-#ifdef CONFIG_GPIO_DW_MULTICORE
-/* Convert DTS pin-number array to a bitmask at compile time */
-#define _GPIO_DW_ACK_PIN_BIT(node_id, prop, idx) \
-	BIT(DT_PROP_BY_IDX(node_id, prop, idx))
-
-#define GPIO_DW_ACK_PIN_MASK(n) \
-	COND_CODE_1(DT_INST_NODE_HAS_PROP(n, multicore_ack_pins), \
-		(DT_INST_FOREACH_PROP_ELEM_SEP(n, multicore_ack_pins, \
-			_GPIO_DW_ACK_PIN_BIT, (|))), (0))
-#endif
-
 #define GPIO_DW_INIT(n)                                                                            \
 	static void gpio_config_##n##_irq(const struct device *port)                               \
 	{                                                                                          \
@@ -565,8 +541,6 @@ static int gpio_dw_initialize(const struct device *port)
 			 .config_func = gpio_config_##n##_irq,                                     \
 			 IF_ENABLED(DT_INST_NODE_HAS_PROP(n, pinctrl_0),					\
 		(.pcfg = PINCTRL_DT_DEV_CONFIG_GET(DT_DRV_INST(n)),))                               \
-		IF_ENABLED(CONFIG_GPIO_DW_MULTICORE, (                                             \
-			.ack_pin_mask = GPIO_DW_ACK_PIN_MASK(n),))               \
 	};            \
                                                                                                    \
 	static struct gpio_dw_runtime gpio_##n##_runtime = {                                       \
