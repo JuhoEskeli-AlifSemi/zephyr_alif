@@ -449,7 +449,8 @@ static void gpio_dw_isr_pin(const void *arg)
 	gpio_fire_callbacks(&context->callbacks, port, pin_bit);
 }
 
-/* Shared ISR: used when all pins share a single NVIC line */
+#ifdef CONFIG_ENSEMBLE_GEN2
+/* Shared ISR: used when all pins share a single NVIC line (gpio16/17 on E4/E8) */
 static void gpio_dw_isr_shared(const struct device *port)
 {
 	struct gpio_dw_runtime *context = port->data;
@@ -466,6 +467,7 @@ static void gpio_dw_isr_shared(const struct device *port)
 
 	gpio_fire_callbacks(&context->callbacks, port, int_status);
 }
+#endif /* CONFIG_ENSEMBLE_GEN2 */
 
 #else
 
