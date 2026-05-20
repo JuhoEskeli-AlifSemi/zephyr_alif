@@ -867,9 +867,11 @@ static int ov5640_set_fmt(const struct device *dev, enum video_endpoint_id ep,
 			{JPEG_CTRL00_REG, 0x81},     /* YUV422 input */
 			{JPEG_CTRL01_REG, 0x01},     /* SFIFO control */
 			{JPEG_CTRL04_REG, 0x34},     /* Header enable + gated clock enable */
+			{0x4407, 0x04},              /* Quantization scale factor */
 			{VFIFO_CTRL00_REG, 0x80},    /* VFIFO ctrl */
-			{VFIFO_CTRL0C_REG, 0x20},    /* VFIFO CTRL0C default */
-			{VFIFO_CTRL0D_REG, 0x00},    /* Dummy data pad */
+			{0x460b, 0x35},              /* DVP ctrl */
+			{VFIFO_CTRL0C_REG, 0x22},    /* VFIFO CTRL0C */
+			{VFIFO_CTRL0D_REG, 0xF0},    /* Dummy data pad speed max */
 			{0x4712, 0x00},              /* PAD RIGHT CTRL - no padding */
 			{VFIFO_HSIZE_H_REG, (uint8_t)(fmt->width >> 8)},
 			{VFIFO_HSIZE_L_REG, (uint8_t)(fmt->width & 0xff)},
@@ -884,6 +886,46 @@ static int ov5640_set_fmt(const struct device *dev, enum video_endpoint_id ep,
 			LOG_ERR("Unable to set JPEG format");
 			return ret;
 		}
+
+		/* Readback key JPEG registers for debug */
+		uint8_t reg_val = 0;
+
+		ov5640_read_reg(&cfg->i2c, TIMING_TC_REG21_REG, &reg_val, 1);
+		LOG_INF("REG 0x3821 = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, SYS_CLK_ENABLE02_REG, &reg_val, 1);
+		LOG_INF("REG 0x3006 = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, SYS_RESET02_REG, &reg_val, 1);
+		LOG_INF("REG 0x3002 = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, JPG_MODE_SELECT_REG, &reg_val, 1);
+		LOG_INF("REG 0x4713 = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, JPEG_CTRL04_REG, &reg_val, 1);
+		LOG_INF("REG 0x4404 = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, VFIFO_CTRL0C_REG, &reg_val, 1);
+		LOG_INF("REG 0x460C = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, VFIFO_CTRL0D_REG, &reg_val, 1);
+		LOG_INF("REG 0x460D = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, VFIFO_HSIZE_H_REG, &reg_val, 1);
+		LOG_INF("REG 0x4602 = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, VFIFO_HSIZE_L_REG, &reg_val, 1);
+		LOG_INF("REG 0x4603 = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, VFIFO_VSIZE_H_REG, &reg_val, 1);
+		LOG_INF("REG 0x4604 = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, VFIFO_VSIZE_L_REG, &reg_val, 1);
+		LOG_INF("REG 0x4605 = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, 0x4407, &reg_val, 1);
+		LOG_INF("REG 0x4407 = 0x%02x (QS)", reg_val);
+		ov5640_read_reg(&cfg->i2c, 0x460b, &reg_val, 1);
+		LOG_INF("REG 0x460B = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, 0x4417, &reg_val, 1);
+		LOG_INF("REG 0x4417 = 0x%02x (JFIFO overflow)", reg_val);
+		ov5640_read_reg(&cfg->i2c, 0x5000, &reg_val, 1);
+		LOG_INF("REG 0x5000 = 0x%02x (ISP CTRL00)", reg_val);
+		ov5640_read_reg(&cfg->i2c, ISP_CTRL01_REG, &reg_val, 1);
+		LOG_INF("REG 0x5001 = 0x%02x (ISP CTRL01)", reg_val);
+		ov5640_read_reg(&cfg->i2c, 0x4300, &reg_val, 1);
+		LOG_INF("REG 0x4300 = 0x%02x (FMT CTRL)", reg_val);
+		ov5640_read_reg(&cfg->i2c, 0x501f, &reg_val, 1);
+		LOG_INF("REG 0x501F = 0x%02x (FMT MUX)", reg_val);
 
 		return 0;
 	}
