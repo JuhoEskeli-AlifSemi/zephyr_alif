@@ -140,6 +140,8 @@ struct video_cam_data {
 	struct k_poll_signal *signal;
 	struct video_format current_format;
 	bool is_streaming;
+	bool is_jpeg;
+	uint8_t vsync_count;
 };
 
 #endif /* _VIDEO_ALIF_H_ */
