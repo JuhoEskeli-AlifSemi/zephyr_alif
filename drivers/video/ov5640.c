@@ -92,6 +92,19 @@ LOG_MODULE_REGISTER(video_ov5640, CONFIG_VIDEO_LOG_LEVEL);
 #define SDE_CTRL10_REG 0x558a
 #define SDE_CTRL11_REG 0x558b
 
+#define JPEG_CTRL00_REG      0x4400
+#define JPEG_CTRL01_REG      0x4401
+#define JPEG_CTRL04_REG      0x4404
+#define VFIFO_CTRL00_REG     0x4600
+#define VFIFO_HSIZE_H_REG    0x4602
+#define VFIFO_HSIZE_L_REG    0x4603
+#define VFIFO_VSIZE_H_REG    0x4604
+#define VFIFO_VSIZE_L_REG    0x4605
+#define VFIFO_CTRL0C_REG     0x460c
+#define VFIFO_CTRL0D_REG     0x460d
+#define JPG_MODE_SELECT_REG  0x4713
+#define DVP_HREF_CTRL_REG    0x471f
+
 #define DEFAULT_MIPI_CHANNEL 0
 
 #define PI 3.141592654
@@ -584,6 +597,9 @@ static const struct video_format_cap dvp_fmts[] = {
 	OV5640_VIDEO_FORMAT_CAP(160, 120, VIDEO_PIX_FMT_RGB565),
 	OV5640_VIDEO_FORMAT_CAP(320, 240, VIDEO_PIX_FMT_RGB565),
 	OV5640_VIDEO_FORMAT_CAP(480, 272, VIDEO_PIX_FMT_RGB565),
+	OV5640_VIDEO_FORMAT_CAP(160, 120, VIDEO_PIX_FMT_JPEG),
+	OV5640_VIDEO_FORMAT_CAP(320, 240, VIDEO_PIX_FMT_JPEG),
+	OV5640_VIDEO_FORMAT_CAP(480, 272, VIDEO_PIX_FMT_JPEG),
 	{0}};
 
 static inline bool ov5640_is_dvp(const struct device *dev)
@@ -821,6 +837,57 @@ static int ov5640_set_fmt(const struct device *dev, enum video_endpoint_id ep,
 	}
 
 	/* Set pixel format */
+	if (fmt->pixelformat == VIDEO_PIX_FMT_JPEG) {
+		/* Step 1: Enable JPEG clocks first */
+		ret = ov5640_modify_reg(&cfg->i2c, SYS_CLK_ENABLE02_REG, 0x28, 0x28);
+		if (ret) {
+			LOG_ERR("Unable to enable JPEG clocks");
+			return ret;
+		}
+
+		/* Step 2: Release JPEG, JFIFO, SFIFO from reset */
+		ret = ov5640_modify_reg(&cfg->i2c, SYS_RESET02_REG, 0x1C, 0x00);
+		if (ret) {
+			LOG_ERR("Unable to release JPEG reset");
+			return ret;
+		}
+
+		/* Step 3: Enable JPEG in TIMING_TC_REG21 (bit 5) */
+		ret = ov5640_modify_reg(&cfg->i2c, TIMING_TC_REG21_REG, BIT(5), BIT(5));
+		if (ret) {
+			LOG_ERR("Unable to enable JPEG");
+			return ret;
+		}
+
+		/* Step 4: Configure JPEG registers */
+		struct ov5640_reg jpeg_params[] = {
+			{0x4300, 0x30},              /* YUV422 output for JPEG input */
+			{0x501f, 0x00},              /* ISP YUV422 */
+			{JPG_MODE_SELECT_REG, 0x02}, /* JPEG mode 2 */
+			{JPEG_CTRL00_REG, 0x81},     /* YUV422 input */
+			{JPEG_CTRL01_REG, 0x01},     /* SFIFO control */
+			{JPEG_CTRL04_REG, 0x34},     /* Header enable + gated clock enable */
+			{VFIFO_CTRL00_REG, 0x80},    /* VFIFO ctrl */
+			{VFIFO_CTRL0C_REG, 0x20},    /* VFIFO CTRL0C default */
+			{VFIFO_CTRL0D_REG, 0x00},    /* Dummy data pad */
+			{0x4712, 0x00},              /* PAD RIGHT CTRL - no padding */
+			{VFIFO_HSIZE_H_REG, (uint8_t)(fmt->width >> 8)},
+			{VFIFO_HSIZE_L_REG, (uint8_t)(fmt->width & 0xff)},
+			{VFIFO_VSIZE_H_REG, (uint8_t)(fmt->height >> 8)},
+			{VFIFO_VSIZE_L_REG, (uint8_t)(fmt->height & 0xff)},
+			{DVP_HREF_CTRL_REG, 0x40},   /* HREF min blanking */
+		};
+
+		ret = ov5640_write_multi_regs(&cfg->i2c, jpeg_params,
+					      ARRAY_SIZE(jpeg_params));
+		if (ret) {
+			LOG_ERR("Unable to set JPEG format");
+			return ret;
+		}
+
+		return 0;
+	}
+
 	struct ov5640_reg fmt_params[] = {
 		{0x4300, 0x6f},
 		{0x501f, 0x01},
@@ -835,6 +902,11 @@ static int ov5640_set_fmt(const struct device *dev, enum video_endpoint_id ep,
 	if (ret) {
 		LOG_ERR("Unable to set pixel format");
 		return ret;
+	}
+
+	/* Disable JPEG when switching to non-JPEG format */
+	if (ov5640_is_dvp(dev)) {
+		ov5640_modify_reg(&cfg->i2c, TIMING_TC_REG21_REG, BIT(5), 0);
 	}
 
 	if (ov5640_is_dvp(dev)) {

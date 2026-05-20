@@ -188,6 +188,7 @@ unsigned int pix_fmt_bpp(uint32_t fmt)
 	case VIDEO_PIX_FMT_Y6P:
 	case VIDEO_PIX_FMT_Y7P:
 	case VIDEO_PIX_FMT_GREY:
+	case VIDEO_PIX_FMT_JPEG:
 		return 8;
 	case VIDEO_PIX_FMT_Y10P:
 		return 10;
