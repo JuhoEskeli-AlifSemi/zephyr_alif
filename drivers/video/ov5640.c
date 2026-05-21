@@ -551,6 +551,15 @@ static const struct ov5640_reg dvp_480x272_res_params[] = {
 	{0x3814, 0x31}, {0x3815, 0x31}, {0x3820, 0x47}, {0x3821, 0x01}, {0x4602, 0x01},
 	{0x4603, 0xe0}, {0x4604, 0x01}, {0x4605, 0x10}};
 
+/* Initialization sequence for QSXGA resolution (2592x1944) */
+static const struct ov5640_reg dvp_2592x1944_res_params[] = {
+	{0x3800, 0x00}, {0x3801, 0x00}, {0x3802, 0x00}, {0x3803, 0x00}, {0x3804, 0x0a},
+	{0x3805, 0x3f}, {0x3806, 0x07}, {0x3807, 0x9f}, {0x3808, 0x0a}, {0x3809, 0x20},
+	{0x380a, 0x07}, {0x380b, 0x98}, {0x380c, 0x0b}, {0x380d, 0x1c}, {0x380e, 0x07},
+	{0x380f, 0xb0}, {0x3810, 0x00}, {0x3811, 0x10}, {0x3812, 0x00}, {0x3813, 0x04},
+	{0x3814, 0x11}, {0x3815, 0x11}, {0x3820, 0x40}, {0x3821, 0x06}, {0x4602, 0x0a},
+	{0x4603, 0x20}, {0x4604, 0x07}, {0x4605, 0x98}};
+
 static const struct ov5640_mode_config dvp_modes[] = {
 	{
 		.width = 160,
@@ -575,6 +584,14 @@ static const struct ov5640_mode_config dvp_modes[] = {
 		.res_params = dvp_480x272_res_params,
 		.max_frmrate = OV5640_60_FPS,
 		.def_frmrate = OV5640_30_FPS,
+	},
+	{
+		.width = 2592,
+		.height = 1944,
+		.array_size_res_params = ARRAY_SIZE(dvp_2592x1944_res_params),
+		.res_params = dvp_2592x1944_res_params,
+		.max_frmrate = OV5640_15_FPS,
+		.def_frmrate = OV5640_15_FPS,
 	}};
 
 #define OV5640_VIDEO_FORMAT_CAP(width, height, format)                                             \
@@ -600,6 +617,7 @@ static const struct video_format_cap dvp_fmts[] = {
 	OV5640_VIDEO_FORMAT_CAP(160, 120, VIDEO_PIX_FMT_JPEG),
 	OV5640_VIDEO_FORMAT_CAP(320, 240, VIDEO_PIX_FMT_JPEG),
 	OV5640_VIDEO_FORMAT_CAP(480, 272, VIDEO_PIX_FMT_JPEG),
+	OV5640_VIDEO_FORMAT_CAP(2592, 1944, VIDEO_PIX_FMT_JPEG),
 	{0}};
 
 static inline bool ov5640_is_dvp(const struct device *dev)
