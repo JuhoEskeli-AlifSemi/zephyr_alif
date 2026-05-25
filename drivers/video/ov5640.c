@@ -568,13 +568,6 @@ static const struct ov5640_reg dvp_2592x1944_res_params[] = {
 	{0x3035, 0x11}, {0x3036, 0x69}, {0x3037, 0x13},
 	/* 0x3108: bits[5:4]=10 → PCLK=pll_clki/4; bits[1:0]=01 → SCLK=pll_clki/2 (unchanged). */
 	{0x3108, 0x21},
-	/* 0x460c: JPEG dummy data pad speed → 0 (bits[7:4]=0).
-	 * At sys_div=1 the internal clock is 3× faster, which scales the number of
-	 * 0xFF dummy bytes output before/after the JPEG SOI/EOI proportionally.
-	 * Leaving dummy speed at the init default (2) would push SOI past buf[0] and
-	 * bloat the captured stream beyond the 420 KB buffer.  Speed=0 suppresses the
-	 * extra dummy bytes; bit[1]=1 keeps PCLK manual mode from init_params_dvp. */
-	{0x460c, 0x02},
 	/* Disable VTS auto-extend (bit2) + manual AE (bit0), keep AGC auto */
 	{0x3503, 0x05},
 	/* AEC: 360 lines × 1/16 = 0x1680 (scaled 3× from 120 lines at sys_div=3).
@@ -906,11 +899,21 @@ static int ov5640_set_fmt(const struct device *dev, enum video_endpoint_id ep,
 			{JPEG_CTRL00_REG, 0x81},     /* YUV422 input */
 			{JPEG_CTRL01_REG, 0x01},     /* SFIFO control */
 			{JPEG_CTRL04_REG, 0x34},     /* Header enable + gated clock enable */
-			{0x4407, 0x04},              /* Quantization scale factor */
+			/* Qscale 8: ~2× compression vs default 4.
+			 * At sys_div=1 SCLK is 3× faster; the JPEG encoder produces
+			 * more data per frame which can overflow the 420 KB capture
+			 * buffer for complex scenes.  Qscale 8 keeps complex scenes
+			 * well under the buffer limit with acceptable image quality. */
+			{0x4407, 0x08},              /* Quantization scale factor */
 			{VFIFO_CTRL00_REG, 0x80},    /* VFIFO ctrl */
 			{0x460b, 0x35},              /* DVP ctrl */
-			{VFIFO_CTRL0C_REG, 0x22},    /* VFIFO CTRL0C */
-			{VFIFO_CTRL0D_REG, 0xF0},    /* Dummy data pad speed max */
+			/* 0x460c/0x460d: JPEG dummy data pad speed = 0.
+			 * Dummy bytes scale with SCLK; leaving speed > 0 at sys_div=1
+			 * adds ~3× more 0xFF bytes before the SOI, pushing the SOI
+			 * marker past buf[0] and bloating the captured stream.
+			 * bit[1]=1 in 0x460c preserves PCLK manual mode. */
+			{VFIFO_CTRL0C_REG, 0x02},    /* VFIFO CTRL0C: dummy speed=0, PCLK manual */
+			{VFIFO_CTRL0D_REG, 0x00},    /* Dummy data pad speed = 0 */
 			{0x4712, 0x00},              /* PAD RIGHT CTRL - no padding */
 			{VFIFO_HSIZE_H_REG, (uint8_t)(fmt->width >> 8)},
 			{VFIFO_HSIZE_L_REG, (uint8_t)(fmt->width & 0xff)},
