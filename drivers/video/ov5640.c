@@ -19,6 +19,10 @@
 #include <zephyr/drivers/video-controls.h>
 #include <zephyr/dt-bindings/video/video-interfaces.h>
 
+#ifdef CONFIG_RTSS_HE
+#include <soc_common.h>
+#endif
+
 LOG_MODULE_REGISTER(video_ov5640, CONFIG_VIDEO_LOG_LEVEL);
 
 #define CHIP_ID_REG 0x300a
@@ -910,46 +914,6 @@ static int ov5640_set_fmt(const struct device *dev, enum video_endpoint_id ep,
 			return ret;
 		}
 
-		/* Readback key JPEG registers for debug */
-		uint8_t reg_val = 0;
-
-		ov5640_read_reg(&cfg->i2c, TIMING_TC_REG21_REG, &reg_val, 1);
-		LOG_INF("REG 0x3821 = 0x%02x", reg_val);
-		ov5640_read_reg(&cfg->i2c, SYS_CLK_ENABLE02_REG, &reg_val, 1);
-		LOG_INF("REG 0x3006 = 0x%02x", reg_val);
-		ov5640_read_reg(&cfg->i2c, SYS_RESET02_REG, &reg_val, 1);
-		LOG_INF("REG 0x3002 = 0x%02x", reg_val);
-		ov5640_read_reg(&cfg->i2c, JPG_MODE_SELECT_REG, &reg_val, 1);
-		LOG_INF("REG 0x4713 = 0x%02x", reg_val);
-		ov5640_read_reg(&cfg->i2c, JPEG_CTRL04_REG, &reg_val, 1);
-		LOG_INF("REG 0x4404 = 0x%02x", reg_val);
-		ov5640_read_reg(&cfg->i2c, VFIFO_CTRL0C_REG, &reg_val, 1);
-		LOG_INF("REG 0x460C = 0x%02x", reg_val);
-		ov5640_read_reg(&cfg->i2c, VFIFO_CTRL0D_REG, &reg_val, 1);
-		LOG_INF("REG 0x460D = 0x%02x", reg_val);
-		ov5640_read_reg(&cfg->i2c, VFIFO_HSIZE_H_REG, &reg_val, 1);
-		LOG_INF("REG 0x4602 = 0x%02x", reg_val);
-		ov5640_read_reg(&cfg->i2c, VFIFO_HSIZE_L_REG, &reg_val, 1);
-		LOG_INF("REG 0x4603 = 0x%02x", reg_val);
-		ov5640_read_reg(&cfg->i2c, VFIFO_VSIZE_H_REG, &reg_val, 1);
-		LOG_INF("REG 0x4604 = 0x%02x", reg_val);
-		ov5640_read_reg(&cfg->i2c, VFIFO_VSIZE_L_REG, &reg_val, 1);
-		LOG_INF("REG 0x4605 = 0x%02x", reg_val);
-		ov5640_read_reg(&cfg->i2c, 0x4407, &reg_val, 1);
-		LOG_INF("REG 0x4407 = 0x%02x (QS)", reg_val);
-		ov5640_read_reg(&cfg->i2c, 0x460b, &reg_val, 1);
-		LOG_INF("REG 0x460B = 0x%02x", reg_val);
-		ov5640_read_reg(&cfg->i2c, 0x4417, &reg_val, 1);
-		LOG_INF("REG 0x4417 = 0x%02x (JFIFO overflow)", reg_val);
-		ov5640_read_reg(&cfg->i2c, 0x5000, &reg_val, 1);
-		LOG_INF("REG 0x5000 = 0x%02x (ISP CTRL00)", reg_val);
-		ov5640_read_reg(&cfg->i2c, ISP_CTRL01_REG, &reg_val, 1);
-		LOG_INF("REG 0x5001 = 0x%02x (ISP CTRL01)", reg_val);
-		ov5640_read_reg(&cfg->i2c, 0x4300, &reg_val, 1);
-		LOG_INF("REG 0x4300 = 0x%02x (FMT CTRL)", reg_val);
-		ov5640_read_reg(&cfg->i2c, 0x501f, &reg_val, 1);
-		LOG_INF("REG 0x501F = 0x%02x (FMT MUX)", reg_val);
-
 		return 0;
 	}
 
@@ -1317,6 +1281,19 @@ static int ov5640_init(const struct device *dev)
 		return -ENODEV;
 	}
 
+#if 0
+	/* Enable XVCLK for DVP (LP-CAM) interface on Alif HE subsystem.
+	 * Divides the 160 MHz HE core clock by 8 → 20 MHz XVCLK.
+	 * Must be stable before PWDN/RESET are released so the sensor's
+	 * PLLs have a valid reference from the moment they are powered up.
+	 */
+#if defined(CONFIG_RTSS_HE) && defined(M55HE_CFG_HE_CAMERA_PIXCLK)
+	if (ov5640_is_dvp(dev)) {
+		sys_write32(0x080001, M55HE_CFG_HE_CAMERA_PIXCLK);
+	}
+#endif
+#endif
+
 	/* Power up sequence */
 	if (cfg->powerdown_gpio.port != NULL) {
 		ret = gpio_pin_configure_dt(&cfg->powerdown_gpio, GPIO_OUTPUT_ACTIVE);
@@ -1332,7 +1309,7 @@ static int ov5640_init(const struct device *dev)
 		}
 	}
 
-	k_sleep(K_MSEC(5));
+	k_sleep(K_MSEC(1));
 
 	if (cfg->powerdown_gpio.port != NULL) {
 		gpio_pin_set_dt(&cfg->powerdown_gpio, 0);
