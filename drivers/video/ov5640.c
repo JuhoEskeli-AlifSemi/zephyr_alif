@@ -19,10 +19,6 @@
 #include <zephyr/drivers/video-controls.h>
 #include <zephyr/dt-bindings/video/video-interfaces.h>
 
-#ifdef CONFIG_RTSS_HE
-#include <soc_common.h>
-#endif
-
 LOG_MODULE_REGISTER(video_ov5640, CONFIG_VIDEO_LOG_LEVEL);
 
 #define CHIP_ID_REG 0x300a
@@ -563,11 +559,27 @@ static const struct ov5640_reg dvp_2592x1944_res_params[] = {
 	{0x380f, 0xb0}, {0x3810, 0x00}, {0x3811, 0x10}, {0x3812, 0x00}, {0x3813, 0x04},
 	{0x3814, 0x11}, {0x3815, 0x11}, {0x3820, 0x40}, {0x3821, 0x06}, {0x4602, 0x0a},
 	{0x4603, 0x20}, {0x4604, 0x07}, {0x4605, 0x98},
-	/* PLL: moderate boost for QSXGA, stay under 60 MHz PCLK */
-	{0x3035, 0x31}, {0x3036, 0x69}, {0x3037, 0x13},
+	/* PLL: sys_div=1 (0x3035[7:4]=1) gives ~80 ms frames (3× faster than sys_div=3).
+	 * root_div=2 kept (0x3037[4]=1) — removing it caused JPEG SOI miss.
+	 * VCO unchanged at 700 MHz (XVCLK=20 MHz, pre_div=3, mult=105, root_div=2).
+	 * 0x3108[5:4]=10 → PCLK = pll_clki/4 ≈ 17.5 MHz (safely under 23.3 MHz baseline).
+	 * This decouples the output pad clock from the sensor's internal pixel clock,
+	 * allowing fast frame readout without overdriving the LP-CPI. */
+	{0x3035, 0x11}, {0x3036, 0x69}, {0x3037, 0x13},
+	/* 0x3108: bits[5:4]=10 → PCLK=pll_clki/4; bits[1:0]=01 → SCLK=pll_clki/2 (unchanged). */
+	{0x3108, 0x21},
+	/* 0x460c: JPEG dummy data pad speed → 0 (bits[7:4]=0).
+	 * At sys_div=1 the internal clock is 3× faster, which scales the number of
+	 * 0xFF dummy bytes output before/after the JPEG SOI/EOI proportionally.
+	 * Leaving dummy speed at the init default (2) would push SOI past buf[0] and
+	 * bloat the captured stream beyond the 420 KB buffer.  Speed=0 suppresses the
+	 * extra dummy bytes; bit[1]=1 keeps PCLK manual mode from init_params_dvp. */
+	{0x460c, 0x02},
 	/* Disable VTS auto-extend (bit2) + manual AE (bit0), keep AGC auto */
 	{0x3503, 0x05},
-	{0x3500, 0x00}, {0x3501, 0x07}, {0x3502, 0x80}};
+	/* AEC: 360 lines × 1/16 = 0x1680 (scaled 3× from 120 lines at sys_div=3).
+	 * Keeps same wall-clock exposure duration at the 3× faster pixel clock. */
+	{0x3500, 0x00}, {0x3501, 0x16}, {0x3502, 0x80}};
 
 static const struct ov5640_mode_config dvp_modes[] = {
 	{
@@ -913,6 +925,46 @@ static int ov5640_set_fmt(const struct device *dev, enum video_endpoint_id ep,
 			LOG_ERR("Unable to set JPEG format");
 			return ret;
 		}
+
+		/* Readback key JPEG registers for debug */
+		uint8_t reg_val = 0;
+
+		ov5640_read_reg(&cfg->i2c, TIMING_TC_REG21_REG, &reg_val, 1);
+		LOG_INF("REG 0x3821 = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, SYS_CLK_ENABLE02_REG, &reg_val, 1);
+		LOG_INF("REG 0x3006 = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, SYS_RESET02_REG, &reg_val, 1);
+		LOG_INF("REG 0x3002 = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, JPG_MODE_SELECT_REG, &reg_val, 1);
+		LOG_INF("REG 0x4713 = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, JPEG_CTRL04_REG, &reg_val, 1);
+		LOG_INF("REG 0x4404 = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, VFIFO_CTRL0C_REG, &reg_val, 1);
+		LOG_INF("REG 0x460C = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, VFIFO_CTRL0D_REG, &reg_val, 1);
+		LOG_INF("REG 0x460D = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, VFIFO_HSIZE_H_REG, &reg_val, 1);
+		LOG_INF("REG 0x4602 = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, VFIFO_HSIZE_L_REG, &reg_val, 1);
+		LOG_INF("REG 0x4603 = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, VFIFO_VSIZE_H_REG, &reg_val, 1);
+		LOG_INF("REG 0x4604 = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, VFIFO_VSIZE_L_REG, &reg_val, 1);
+		LOG_INF("REG 0x4605 = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, 0x4407, &reg_val, 1);
+		LOG_INF("REG 0x4407 = 0x%02x (QS)", reg_val);
+		ov5640_read_reg(&cfg->i2c, 0x460b, &reg_val, 1);
+		LOG_INF("REG 0x460B = 0x%02x", reg_val);
+		ov5640_read_reg(&cfg->i2c, 0x4417, &reg_val, 1);
+		LOG_INF("REG 0x4417 = 0x%02x (JFIFO overflow)", reg_val);
+		ov5640_read_reg(&cfg->i2c, 0x5000, &reg_val, 1);
+		LOG_INF("REG 0x5000 = 0x%02x (ISP CTRL00)", reg_val);
+		ov5640_read_reg(&cfg->i2c, ISP_CTRL01_REG, &reg_val, 1);
+		LOG_INF("REG 0x5001 = 0x%02x (ISP CTRL01)", reg_val);
+		ov5640_read_reg(&cfg->i2c, 0x4300, &reg_val, 1);
+		LOG_INF("REG 0x4300 = 0x%02x (FMT CTRL)", reg_val);
+		ov5640_read_reg(&cfg->i2c, 0x501f, &reg_val, 1);
+		LOG_INF("REG 0x501F = 0x%02x (FMT MUX)", reg_val);
 
 		return 0;
 	}
@@ -1281,19 +1333,6 @@ static int ov5640_init(const struct device *dev)
 		return -ENODEV;
 	}
 
-#if 0
-	/* Enable XVCLK for DVP (LP-CAM) interface on Alif HE subsystem.
-	 * Divides the 160 MHz HE core clock by 8 → 20 MHz XVCLK.
-	 * Must be stable before PWDN/RESET are released so the sensor's
-	 * PLLs have a valid reference from the moment they are powered up.
-	 */
-#if defined(CONFIG_RTSS_HE) && defined(M55HE_CFG_HE_CAMERA_PIXCLK)
-	if (ov5640_is_dvp(dev)) {
-		sys_write32(0x080001, M55HE_CFG_HE_CAMERA_PIXCLK);
-	}
-#endif
-#endif
-
 	/* Power up sequence */
 	if (cfg->powerdown_gpio.port != NULL) {
 		ret = gpio_pin_configure_dt(&cfg->powerdown_gpio, GPIO_OUTPUT_ACTIVE);
@@ -1309,7 +1348,7 @@ static int ov5640_init(const struct device *dev)
 		}
 	}
 
-	k_sleep(K_MSEC(1));
+	k_sleep(K_MSEC(5));
 
 	if (cfg->powerdown_gpio.port != NULL) {
 		gpio_pin_set_dt(&cfg->powerdown_gpio, 0);
