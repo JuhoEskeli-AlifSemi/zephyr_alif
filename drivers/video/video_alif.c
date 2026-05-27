@@ -535,8 +535,20 @@ static int alif_cam_stream_start(const struct device *dev)
 	}
 
 	if (sys_read32(regs + CAM_CTRL) & CAM_CTRL_BUSY) {
-		LOG_ERR("Can't start stream. Already Capturing!");
-		return -EBUSY;
+		/*
+		 * BUSY is stuck from a previous capture whose cleanup ran
+		 * through the work-callback early-return path.  Disable
+		 * interrupts first so the SW_RESET does not trigger INTR_STOP
+		 * while they are still live, then force-clear BUSY and any
+		 * accumulated interrupt flags before re-enabling below.
+		 */
+		LOG_WRN("CPI busy at stream_start, forcing SW_RESET to clear");
+		hw_disable_interrupts(regs, INTR_VSYNC | INTR_BRESP_ERR | INTR_OUTFIFO_OVERRUN |
+						   INTR_INFIFO_OVERRUN | INTR_STOP);
+		sys_write32(CAM_CTRL_SW_RESET, regs + CAM_CTRL);
+		sys_write32(0, regs + CAM_CTRL);
+		sys_write32(~0u, regs + CAM_INTR);   /* clear all pending flags */
+		data->vsync_count = 0;
 	}
 
 	if (((IS_ENABLED(CONFIG_VIDEO_ALIF_CAM_EXTENDED)) && config->axi_bus_ep) ||
@@ -553,16 +565,35 @@ static int alif_cam_stream_start(const struct device *dev)
 				regs + CAM_FRAME_ADDR);
 	}
 
-	/* Setup the interrupts. */
-	hw_enable_interrupts(regs, INTR_VSYNC | INTR_BRESP_ERR | INTR_OUTFIFO_OVERRUN |
-					   INTR_INFIFO_OVERRUN | INTR_STOP);
+	data->cold_start = true;
 
-	/* Start the MIPI CSI-2 IP in case the MIPI CSI is available. */
+	/* Start the sensor endpoint (SW_PWUP for OV5640) BEFORE enabling
+	 * interrupts.  The OV5640 emits spurious VSYNCs for a few ms right
+	 * after SW_PWUP while its PLLs lock; arming interrupts only after
+	 * this settle window prevents those garbage pulses from triggering
+	 * the ISR and corrupting driver state.
+	 */
 	ret = video_stream_start(config->endpoint_dev);
 	if (ret) {
 		LOG_ERR("Failed to start streaming of Video pipeline!");
 		return -EIO;
 	}
+
+	if (data->cold_start) {
+		/*
+		 * OV5640 emits spurious VSYNCs for ~1 ms after SW_PWUP while
+		 * its PLLs lock.  5 ms gives 5× margin.  After the settle,
+		 * clear any interrupt flags the hardware latched so the first
+		 * real VSYNC arrives into a clean ISR state.
+		 */
+		k_msleep(5);
+		sys_write32(~0u, regs + CAM_INTR);   /* clear pending flags */
+		data->vsync_count = 0;
+	}
+
+	/* Setup the interrupts. */
+	hw_enable_interrupts(regs, INTR_VSYNC | INTR_BRESP_ERR | INTR_OUTFIFO_OVERRUN |
+					   INTR_INFIFO_OVERRUN | INTR_STOP);
 
 	hw_cam_start_video_capture(dev);
 	LOG_DBG("Stream started");
@@ -581,6 +612,13 @@ static int alif_cam_stream_stop(const struct device *dev)
 	int ret;
 
 	if (!data->is_streaming) {
+		/*
+		 * The work callback may have already cleared is_streaming but
+		 * left interrupts enabled.  Silence them unconditionally so
+		 * stale VSYNCs cannot interfere with the next stream_start.
+		 */
+		hw_disable_interrupts(regs, INTR_VSYNC | INTR_BRESP_ERR | INTR_OUTFIFO_OVERRUN |
+						    INTR_INFIFO_OVERRUN | INTR_STOP);
 		LOG_DBG("Already stopped streaming.");
 		return 0;
 	}
@@ -609,6 +647,19 @@ static int alif_cam_stream_stop(const struct device *dev)
 	for (int i = 0; (i < 20) && (sys_read32(regs + CAM_CTRL) & mask) == mask; i++) {
 		k_msleep(1);
 	}
+
+	/*
+	 * If BUSY is still set after the poll (e.g. after a sensor startup
+	 * glitch that produced back-to-back garbage VSYNCs leaving the CPI
+	 * in a stuck state), force a SW_RESET to ensure the controller is
+	 * fully idle before the next stream_start.
+	 */
+	if (sys_read32(regs + CAM_CTRL) & CAM_CTRL_BUSY) {
+		LOG_WRN("CPI still busy after stop, forcing SW_RESET");
+		sys_write32(CAM_CTRL_SW_RESET, regs + CAM_CTRL);
+		sys_write32(0, regs + CAM_CTRL);
+	}
+
 	LOG_DBG("Stream stopped");
 
 	data->is_streaming = false;
@@ -841,10 +892,19 @@ static void alif_video_cam_isr(const struct device *dev)
 
 		/*
 		 * For JPEG snapshot capture INTR_STOP never fires.
-		 * The 2nd VSYNC marks end-of-frame: stop the CPI and
-		 * submit the work item to move the buffer to fifo_out.
+		 * VSYNC1 = capture-start, VSYNC2 = capture-end (end-of-frame).
+		 *
+		 * cold_start means the CPI was armed before the sensor produced
+		 * its first VSYNC after power-up, so VSYNC1 and VSYNC2 are the
+		 * sensor's first frame pair with no missed warm-up frame.
+		 * Once the frame rate PLL is corrected the threshold can be
+		 * lowered to 1 for cold_start captures to save one full frame
+		 * period.  For now both paths use 2.
 		 */
-		if (data->is_jpeg && data->vsync_count >= 2) {
+		uint8_t vsync_needed = 2;
+
+		if (data->is_jpeg && data->vsync_count >= vsync_needed) {
+			data->cold_start = false;
 			sys_write32(0, regs + CAM_CTRL);
 			if (is_not_corrupted_frame) {
 				LOG_INF("JPEG frame complete (VSYNC).");

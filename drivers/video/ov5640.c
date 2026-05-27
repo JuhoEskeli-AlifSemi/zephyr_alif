@@ -469,7 +469,12 @@ static const struct ov5640_reg init_params_dvp[] = {
 	{0x3500, 0x00}, /* AEC bit[19:16] */
 	{0x3501, 0x25}, /* AEC bit[15:8] */
 	{0x3502, 0x80}, /* AEC bit[7:0] */
-	{0x3008, 0x02},
+	/* SW_PWUP (0x3008=0x02) is intentionally omitted here.
+	 * The sensor stays in power-down until stream_start, which calls
+	 * ov5640_set_stream(true) → SW_PWUP after the CPI is already armed.
+	 * This guarantees the CPI is ready before the sensor emits its first
+	 * VSYNC, so capture starts on the very first frame after cold boot.
+	 */
 	{0x3a02, 0x07},
 	{0x3a03, 0xae},
 	{0x3a08, 0x01},

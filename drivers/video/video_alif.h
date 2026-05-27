@@ -141,6 +141,7 @@ struct video_cam_data {
 	struct video_format current_format;
 	bool is_streaming;
 	bool is_jpeg;
+	bool cold_start;  /* true when CPI was armed before sensor first VSYNC */
 	uint8_t vsync_count;
 };
 
