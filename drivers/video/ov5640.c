@@ -452,13 +452,13 @@ static const struct ov5640_reg init_params_dvp[] = {
 	{0x460b, 0x35},
 	{0x460c, 0x22},
 	{0x3824, 0x01}, /* DVP PCLK divider = 1 */
-	{0x3406, 0x01},
-	{0x3400, 0x06},
-	{0x3401, 0x80},
-	{0x3402, 0x04},
-	{0x3403, 0x00},
-	{0x3404, 0x06},
-	{0x3405, 0x00},
+	{0x3406, 0x01}, /* AWB manual gain enable (bit0), keep AWB gain 0 = auto, 1 = manual */
+	{0x3400, 0x06}, /* AWB R gain[11:8] */
+	{0x3401, 0x80}, /* AWB R gain[7:0]  */
+	{0x3402, 0x04}, /* AWB G gain[11:8] */
+	{0x3403, 0x00}, /* AWB G gain[7:0]  */
+	{0x3404, 0x06}, /* AWB B gain[11:8] */
+	{0x3405, 0x00}, /* AWB B gain[7:0]  */
 	{0x5688, 0x22},
 	{0x5689, 0x22},
 	{0x568a, 0x42},
@@ -468,7 +468,6 @@ static const struct ov5640_reg init_params_dvp[] = {
 	{0x568e, 0x22},
 	{0x568f, 0x22},
 	{0x5025, 0x00},
-	{0x3406, 0x00},
 	{0x3503, 0x01}, /* manual AE (bit0), keep AGC auto */
 	/* SW_PWUP (0x3008=0x02) is intentionally omitted here.
 	 * The sensor stays in power-down until stream_start, which calls
@@ -907,7 +906,7 @@ static int ov5640_set_fmt(const struct device *dev, enum video_endpoint_id ep,
 			 * more data per frame which can overflow the 420 KB capture
 			 * buffer for complex scenes.  Qscale 8 keeps complex scenes
 			 * well under the buffer limit with acceptable image quality. */
-			{0x4407, 0x08},              /* Quantization scale factor */
+			{0x4407, 0x06},              /* Quantization scale factor */
 			{VFIFO_CTRL00_REG, 0x80},    /* VFIFO ctrl */
 			{0x460b, 0x35},              /* DVP ctrl */
 			/* 0x460c/0x460d: JPEG dummy data pad speed = 0.
