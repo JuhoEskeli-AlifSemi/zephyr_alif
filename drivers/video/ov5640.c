@@ -469,10 +469,7 @@ static const struct ov5640_reg init_params_dvp[] = {
 	{0x568f, 0x22},
 	{0x5025, 0x00},
 	{0x3406, 0x00},
-	{0x3503, 0x01}, /* Enable manual setting for AE */
-	{0x3500, 0x00}, /* AEC bit[19:16] */
-	{0x3501, 0x25}, /* AEC bit[15:8] */
-	{0x3502, 0x80}, /* AEC bit[7:0] */
+	{0x3503, 0x01}, /* manual AE (bit0), keep AGC auto */
 	/* SW_PWUP (0x3008=0x02) is intentionally omitted here.
 	 * The sensor stays in power-down until stream_start, which calls
 	 * ov5640_set_stream(true) → SW_PWUP after the CPI is already armed.
@@ -577,11 +574,8 @@ static const struct ov5640_reg dvp_2592x1944_res_params[] = {
 	{0x3035, 0x11}, {0x3036, 0x69}, {0x3037, 0x13},
 	/* 0x3108: bits[5:4]=10 → PCLK=pll_clki/4; bits[1:0]=01 → SCLK=pll_clki/2 (unchanged). */
 	{0x3108, 0x21},
-	/* Disable VTS auto-extend (bit2) + manual AE (bit0), keep AGC auto */
-	{0x3503, 0x05},
-	/* AEC: 360 lines × 1/16 = 0x1680 (scaled 3× from 120 lines at sys_div=3).
-	 * Keeps same wall-clock exposure duration at the 3× faster pixel clock. */
-	{0x3500, 0x00}, {0x3501, 0x16}, {0x3502, 0x80}};
+	/* AEC PK EXPOSURE [19:0] */
+	{0x3500, 0x01}, {0x3501, 0x2c}, {0x3502, 0x00}};
 
 static const struct ov5640_mode_config dvp_modes[] = {
 	{
