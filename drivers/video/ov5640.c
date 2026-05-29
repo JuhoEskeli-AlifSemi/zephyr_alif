@@ -17,12 +17,15 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/video.h>
 #include <zephyr/drivers/video-controls.h>
+#include <zephyr/drivers/video/ov5640-video-controls.h>
 #include <zephyr/dt-bindings/video/video-interfaces.h>
 
 LOG_MODULE_REGISTER(video_ov5640, CONFIG_VIDEO_LOG_LEVEL);
 
 #define CHIP_ID_REG 0x300a
 #define CHIP_ID_VAL 0x5640
+
+#define CHIP_REVISION_REG 0x302a
 
 #define SYS_CTRL0_REG     0x3008
 #define SYS_CTRL0_SW_PWDN 0x42
@@ -159,6 +162,7 @@ struct ov5640_data {
 	uint64_t cur_pixrate;
 	uint16_t cur_frmrate;
 	const struct ov5640_mode_config *cur_mode;
+	uint8_t chip_revision;
 };
 
 static const struct ov5640_reg init_params_common[] = {
@@ -1259,6 +1263,10 @@ static inline int ov5640_get_ctrl(const struct device *dev, unsigned int cid, vo
 		*((uint64_t *)value) = drv_data->cur_pixrate;
 
 		return 0;
+	case VIDEO_OV5640_CID_CHIP_REVISION:
+		*((uint8_t *)value) = drv_data->chip_revision;
+
+		return 0;
 	default:
 		return -ENOTSUP;
 	}
@@ -1322,8 +1330,10 @@ static DEVICE_API(video, ov5640_driver_api) = {
 static int ov5640_init(const struct device *dev)
 {
 	const struct ov5640_config *cfg = dev->config;
+	struct ov5640_data *drv_data = dev->data;
 	struct video_format fmt;
 	uint16_t chip_id;
+	uint8_t chip_rev;
 	int ret;
 
 	if (!device_is_ready(cfg->i2c.bus)) {
@@ -1422,6 +1432,32 @@ static int ov5640_init(const struct device *dev)
 	if (chip_id != CHIP_ID_VAL) {
 		LOG_ERR("Wrong chip ID: %04x (expected %04x)", chip_id, CHIP_ID_VAL);
 		return -ENODEV;
+	}
+
+	/* Read chip revision (reg 0x302A): bit[7:4] process, bit[3:0] revision */
+	ret = ov5640_read_reg(&cfg->i2c, CHIP_REVISION_REG, &chip_rev, sizeof(chip_rev));
+	if (ret) {
+		LOG_ERR("Unable to read chip revision, ret = %d", ret);
+		return -EIO;
+	}
+	drv_data->chip_revision = chip_rev;
+
+	{
+		const char *proc;
+
+		switch (chip_rev >> 4) {
+		case 0xA:
+			proc = "FSI";
+			break;
+		case 0xB:
+			proc = "BSI";
+			break;
+		default:
+			proc = "unknown";
+			break;
+		}
+		LOG_INF("Chip revision reg 0x302A = 0x%02x (process %s, revision %u)",
+			chip_rev, proc, chip_rev & 0x0F);
 	}
 
 	/* Set default format */
