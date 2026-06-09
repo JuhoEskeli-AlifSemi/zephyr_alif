@@ -336,6 +336,13 @@ class AlifImageBinaryRunner(ZephyrBinaryRunner):
         else:
             cpu_node = json_data["HE_APP"]
 
+        # Remove non-target core entries so only the active core is flashed.
+        # The template JSON may contain stubs/apps for A32, HP and HE cores.
+        core_keys = {"A32_STUB", "A32_APP", "HP_STUB", "HP_APP", "HE_STUB", "HE_APP"}
+        target_key = "HP_APP" if build_core == "hp" else "HE_APP"
+        for key in core_keys - {target_key}:
+            json_data.pop(key, None)
+
         # update binary name
         cpu_node["binary"] = "zephyr.bin"
 
