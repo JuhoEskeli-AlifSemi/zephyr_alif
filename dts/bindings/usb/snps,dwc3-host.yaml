@@ -1,0 +1,35 @@
+# Copyright (c) 2025 Alif Semiconductor
+# SPDX-License-Identifier: Apache-2.0
+
+description: DesignWare USB DWC3 Host Controller
+
+compatible: "snps,dwc3-host"
+
+include: [base.yaml]
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  clocks:
+    required: true
+
+  maximum-speed:
+    type: string
+    description: |
+      Maximum USB speed supported by the controller.
+
+  num-in-eps:
+    type: int
+    required: true
+    description: |
+      Number of configured IN endpoints including control endpoint.
+
+  num-out-eps:
+    type: int
+    required: true
+    description: |
+      Number of configured OUT endpoints including control endpoint.

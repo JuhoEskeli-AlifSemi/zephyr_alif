@@ -1,0 +1,32 @@
+# Copyright (c) 2025 Alif Semiconductor
+# SPDX-License-Identifier: Apache-2.0
+
+config UART_USB_CDC_ACM_HOST
+	bool "UART over USB Host CDC-ACM"
+	depends on USB_HOST_STACK
+	depends on USBH_CDC_ACM
+	depends on DT_HAS_ZEPHYR_CDC_ACM_UART_ENABLED
+	select UART_INTERRUPT_DRIVEN
+	select RING_BUFFER
+	select EXPERIMENTAL
+	help
+	  Enable the UART over USB Host CDC-ACM driver. This creates a
+	  virtual UART device backed by a USB host CDC-ACM class driver,
+	  allowing drivers that use the UART API (such as modem drivers)
+	  to communicate with USB CDC-ACM devices (e.g., USB modems).
+
+if UART_USB_CDC_ACM_HOST
+
+config UART_USB_CDC_ACM_WORKQUEUE_PRIORITY
+	int "UART USB CDC-ACM work queue priority"
+	default MAIN_THREAD_PRIORITY
+	help
+	  Priority of the work queue used for CDC-ACM UART data transfers.
+
+config UART_USB_CDC_ACM_WORKQUEUE_STACK_SIZE
+	int "UART USB CDC-ACM work queue stack size"
+	default 2048
+	help
+	  Stack size for the CDC-ACM UART work queue thread.
+
+endif # UART_USB_CDC_ACM_HOST

@@ -1,28 +1,21 @@
-# Copyright (c) 2021 Nordic Semiconductor ASA
-# SPDX-License-Identifier: Apache-2.0
+description: USB Host CDC-ACM UART bridge
 
-description: USB CDC ACM UART
+  This binding defines a virtual UART backed by a USB host CDC-ACM
+  class driver. It allows drivers that use the Zephyr UART API
+  (such as modem drivers) to communicate with USB CDC-ACM devices
+  (such as USB modems).
 
 compatible: "zephyr,cdc-acm-uart"
 
-include: uart-controller.yaml
-
-on-bus: usb
-
 properties:
-  tx-fifo-size:
-    type: int
-    default: 1024
-    description: |
-      Size of the virtual CDC ACM UART TX FIFO
-
   rx-fifo-size:
     type: int
-    default: 1024
+    default: 2048
     description: |
-      Size of the virtual CDC ACM UART RX FIFO
+      Size of the receive ring buffer in bytes.
 
-  label:
+  tx-fifo-size:
+    type: int
+    default: 2048
     description: |
-      The string defined by the label property is also used for the USB
-      interface string descriptor.
+      Size of the transmit ring buffer in bytes.
