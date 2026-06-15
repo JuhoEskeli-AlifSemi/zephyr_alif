@@ -1,0 +1,21 @@
+# Copyright (c) 2025 Alif Semiconductor
+# SPDX-License-Identifier: Apache-2.0
+
+config UHC_DWC3
+	bool "Synopsys DWC3 USB Host Controller driver"
+	default y
+	depends on DT_HAS_SNPS_DWC3_HOST_ENABLED
+	help
+	  Enable the Synopsys DesignWare DWC3 USB Host Controller driver.
+	  This driver operates the DWC3 IP in host mode, supporting
+	  USB 2.0 High Speed and Full Speed devices.
+
+if UHC_DWC3
+
+config UHC_DWC3_THREAD_STACK_SIZE
+	int "Driver internal thread stack size"
+	default 2048
+	help
+	  Size of the stack used for the DWC3 UHC transfer processing thread.
+
+endif # UHC_DWC3

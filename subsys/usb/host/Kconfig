@@ -53,6 +53,14 @@ config USBH_MAX_UHC_MSG
 	help
 	  Maximum number of USB host controller events that can be queued.
 
+config USBH_CDC_ACM
+	bool "USB host CDC-ACM class driver"
+	help
+	  Enable the USB host CDC-ACM class driver.
+	  This allows the host to communicate with USB devices
+	  presenting a CDC-ACM interface (e.g., USB modems,
+	  USB-to-serial adapters).
+
 rsource "Kconfig.usbip"
 
 endif # USB_HOST_STACK
