@@ -912,7 +912,7 @@ static int xhci_controller_init(const struct uhc_dwc3_config *cfg)
 			/* Check for immediate errors */
 			k_busy_wait(5000);
 			sts = xhci_op_read(cfg, XHCI_USBSTS);
-			uint32_t cmd = xhci_op_read(cfg, XHCI_USBCMD);
+			cmd = xhci_op_read(cfg, XHCI_USBCMD);
 			LOG_INF("Post-start check: USBCMD=0x%08x USBSTS=0x%08x",
 				cmd, sts);
 			if (sts & BIT(2)) {

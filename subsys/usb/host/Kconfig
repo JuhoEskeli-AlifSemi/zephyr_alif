@@ -61,6 +61,30 @@ config USBH_CDC_ACM
 	  presenting a CDC-ACM interface (e.g., USB modems,
 	  USB-to-serial adapters).
 
+config USBH_MSC
+	bool "USB host Mass Storage class driver"
+	depends on UHC_DWC3
+	select DISK_ACCESS
+	help
+	  Enable the USB host Mass Storage (Bulk-Only Transport, SCSI
+	  transparent command set) class driver. It enumerates a connected
+	  USB mass storage device (e.g. a flash drive), runs the SCSI
+	  discovery sequence and registers a disk-access device so a block
+	  filesystem such as FAT can be mounted on the medium.
+
+	  This driver currently uses the DWC3 host controller's synchronous
+	  transfer helpers, hence the dependency on UHC_DWC3.
+
+config USBH_MSC_DISK_NAME
+	string "Disk-access name for the USB mass storage device"
+	depends on USBH_MSC
+	default "USB"
+	help
+	  Name under which the enumerated mass storage medium is registered
+	  with the disk-access subsystem. To mount a FAT filesystem the name
+	  must appear in the FatFs volume string table (FF_VOLUME_STRS); the
+	  default "USB" maps to the mount point "/USB:".
+
 rsource "Kconfig.usbip"
 
 endif # USB_HOST_STACK
