@@ -198,6 +198,13 @@ static struct xhci_erst_entry erst[1] __aligned(64) UHC_DMA_SECTION;
 static uint8_t evt_ring_cycle = 1;
 static uint8_t evt_ring_deq;
 
+/* Signaled by the ISR on each xHCI event interrupt so command/control/bulk
+ * waiters wake immediately instead of busy-polling the event ring. The
+ * isochronous streaming path disables the interrupter and polls directly, so
+ * it does not use this.
+ */
+static struct k_sem uhc_evt_sem;
+
 /* Port speed captured during reset (before PORTSC can change) */
 static uint8_t priv_port_speed;
 
@@ -471,21 +478,30 @@ static void evt_ring_advance(void)
 	}
 }
 
-/* Wait for an event with timeout */
+/* Wait for an event with timeout.
+ *
+ * Blocks on the ISR-signaled semaphore so the CPU is not busy-spun, but falls
+ * back to re-checking the ring every millisecond. This preserves the original
+ * 1 ms worst-case poll cadence even if an event interrupt is ever missed, while
+ * waking immediately when the interrupt does fire. Used only by the
+ * command/control/bulk paths (interrupter enabled); the isochronous pump paths
+ * poll the controller directly.
+ */
 static struct xhci_trb *evt_ring_wait(const struct uhc_dwc3_config *cfg,
 				      int timeout_ms)
 {
-	struct xhci_trb *evt;
-	int elapsed = 0;
+	int64_t deadline = k_uptime_get() + timeout_ms;
 
-	while (elapsed < timeout_ms) {
-		evt = evt_ring_peek();
+	ARG_UNUSED(cfg);
+
+	do {
+		struct xhci_trb *evt = evt_ring_peek();
+
 		if (evt != NULL) {
 			return evt;
 		}
-		k_busy_wait(1000);
-		elapsed++;
-	}
+		k_sem_take(&uhc_evt_sem, K_MSEC(1));
+	} while (k_uptime_get() < deadline);
 
 	return NULL;
 }
@@ -2332,6 +2348,9 @@ static void uhc_dwc3_isr(const struct device *dev)
 			uhc_submit_event(dev, UHC_EVT_DEV_REMOVED, 0);
 		}
 	}
+
+	/* Wake any command/control/bulk waiter blocked in evt_ring_wait(). */
+	k_sem_give(&uhc_evt_sem);
 }
 
 /* ---- Device initialization ---- */
@@ -2356,6 +2375,7 @@ static int uhc_dwc3_driver_init(const struct device *dev)
 	}
 
 	k_mutex_init(&data->mutex);
+	k_sem_init(&uhc_evt_sem, 0, K_SEM_MAX_LIMIT);
 
 	LOG_DBG("DWC3 UHC driver initialized");
 
