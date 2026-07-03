@@ -273,11 +273,6 @@ static uint8_t isoch_lb_last_stereo[ISOCH_OUT_BUF_SIZE] __aligned(64) UHC_DMA_SE
 static int isoch_lb_last_nsamp = 48; /* mono samples in last good mic frame */
 
 
-/* ---- Thread stack ---- */
-#define UHC_DWC3_STACK_SIZE	4096
-static K_KERNEL_STACK_DEFINE(uhc_dwc3_stack, UHC_DWC3_STACK_SIZE);
-static struct k_thread uhc_dwc3_thread_data;
-
 struct uhc_dwc3_config {
 	uintptr_t base;
 	void (*irq_enable_func)(const struct device *dev);
@@ -287,9 +282,6 @@ struct uhc_dwc3_config {
 };
 
 struct uhc_dwc3_data {
-	struct uhc_transfer *last_xfer;
-	struct k_sem xfer_sem;
-	struct k_sem evt_sem;
 	bool port_connected;
 	bool enumerating;    /* Suppress ISR disconnect during enumeration */
 	enum usb_device_speed port_speed;
@@ -2269,55 +2261,36 @@ static int uhc_dwc3_bus_resume(const struct device *dev)
 	return 0;
 }
 
+/*
+ * The asynchronous UHC transfer API (uhc_ep_enqueue / uhc_ep_dequeue) is not
+ * implemented by this driver. This DWC3 controller is an xHCI host, whose
+ * transfer model (per-slot device contexts, Address Device command, TRB rings
+ * keyed by slot + endpoint DCI) does not map onto the generic UHC async
+ * transfer path. Instead the driver exposes synchronous, polled transfer
+ * helpers (uhc_dwc3_*, declared in <zephyr/drivers/usb/uhc_dwc3.h>) that
+ * consumers such as the USB host samples and the usbh_msc class driver use
+ * directly.
+ *
+ * Returning -ENOTSUP (rather than faking a successful completion) ensures a
+ * generic host-class driver that relies on uhc_ep_enqueue fails honestly on
+ * this controller instead of silently transferring nothing.
+ */
 static int uhc_dwc3_ep_enqueue(const struct device *dev,
 			       struct uhc_transfer *const xfer)
 {
-	struct uhc_dwc3_data *priv = uhc_get_private(dev);
-	int ret;
+	ARG_UNUSED(dev);
+	ARG_UNUSED(xfer);
 
-	ret = uhc_xfer_append(dev, xfer);
-	if (ret) {
-		return ret;
-	}
-
-	k_sem_give(&priv->xfer_sem);
-
-	return 0;
+	return -ENOTSUP;
 }
 
 static int uhc_dwc3_ep_dequeue(const struct device *dev,
 			       struct uhc_transfer *const xfer)
 {
-	xfer->err = -ECONNRESET;
+	ARG_UNUSED(dev);
+	ARG_UNUSED(xfer);
 
-	return 0;
-}
-
-/* Worker thread */
-static void uhc_dwc3_thread(void *p1, void *p2, void *p3)
-{
-	const struct device *dev = p1;
-	struct uhc_dwc3_data *priv = uhc_get_private(dev);
-
-	ARG_UNUSED(p2);
-	ARG_UNUSED(p3);
-
-	while (true) {
-		struct uhc_transfer *xfer;
-
-		k_sem_take(&priv->xfer_sem, K_FOREVER);
-
-		if (!uhc_is_enabled(dev)) {
-			continue;
-		}
-
-		xfer = uhc_xfer_get_next(dev);
-		if (xfer == NULL) {
-			continue;
-		}
-
-		uhc_xfer_return(dev, xfer, 0);
-	}
+	return -ENOTSUP;
 }
 
 /* ISR */
@@ -2359,8 +2332,6 @@ static void uhc_dwc3_isr(const struct device *dev)
 			uhc_submit_event(dev, UHC_EVT_DEV_REMOVED, 0);
 		}
 	}
-
-	k_sem_give(&priv->evt_sem);
 }
 
 /* ---- Device initialization ---- */
@@ -2369,7 +2340,6 @@ static int uhc_dwc3_driver_init(const struct device *dev)
 {
 	const struct uhc_dwc3_config *cfg = dev->config;
 	struct uhc_data *data = dev->data;
-	struct uhc_dwc3_data *priv = data->priv;
 	int ret;
 
 	if (cfg->clock_dev != NULL) {
@@ -2386,15 +2356,6 @@ static int uhc_dwc3_driver_init(const struct device *dev)
 	}
 
 	k_mutex_init(&data->mutex);
-	k_sem_init(&priv->xfer_sem, 0, K_SEM_MAX_LIMIT);
-	k_sem_init(&priv->evt_sem, 0, K_SEM_MAX_LIMIT);
-
-	k_thread_create(&uhc_dwc3_thread_data, uhc_dwc3_stack,
-			K_KERNEL_STACK_SIZEOF(uhc_dwc3_stack),
-			uhc_dwc3_thread,
-			(void *)dev, NULL, NULL,
-			K_PRIO_COOP(2), 0, K_NO_WAIT);
-	k_thread_name_set(&uhc_dwc3_thread_data, "uhc_dwc3");
 
 	LOG_DBG("DWC3 UHC driver initialized");
 

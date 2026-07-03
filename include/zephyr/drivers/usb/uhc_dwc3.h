@@ -8,10 +8,12 @@
  * @brief DWC3 USB host controller extension helpers
  *
  * These functions are synchronous, polling helpers exported by the DWC3 UHC
- * driver (``zephyr/drivers/usb/uhc/uhc_dwc3.c``) in addition to the standard
- * @ref uhc_api. They drive enumeration and control/bulk/isochronous transfers
- * directly (bypassing the asynchronous ``uhc_ep_enqueue`` path) and are used by
- * the USB host samples and the ``usbh_msc`` class driver.
+ * driver (``zephyr/drivers/usb/uhc/uhc_dwc3.c``). This xHCI host controller
+ * does not implement the asynchronous @ref uhc_api transfer path
+ * (``uhc_ep_enqueue`` / ``uhc_ep_dequeue`` return ``-ENOTSUP``); these helpers
+ * are the transfer API for the controller instead. They drive enumeration and
+ * control/bulk/isochronous transfers directly and are used by the USB host
+ * samples and the ``usbh_msc`` class driver.
  *
  * They are specific to the DWC3 controller and require @kconfig{CONFIG_UHC_DWC3}.
  */
