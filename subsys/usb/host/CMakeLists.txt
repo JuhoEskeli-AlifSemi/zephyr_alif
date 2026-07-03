@@ -22,6 +22,11 @@ zephyr_library_sources_ifdef(
 )
 
 zephyr_library_sources_ifdef(
+  CONFIG_USBH_MSC
+  usbh_msc.c
+)
+
+zephyr_library_sources_ifdef(
   CONFIG_USBIP
   usbip.c
 )
