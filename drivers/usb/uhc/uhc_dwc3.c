@@ -224,9 +224,12 @@ static struct xhci_trb bulk_out_ring[BULK_RING_SIZE + 1] __aligned(64) UHC_DMA_S
 static uint8_t bulk_out_cycle = 1;
 static uint8_t bulk_out_enq;
 
-/* Bulk data buffers */
-static uint8_t bulk_in_buf[64] __aligned(64) UHC_DMA_SECTION;
-static uint8_t bulk_out_buf[64] __aligned(64) UHC_DMA_SECTION;
+/* Bulk data buffers. Sized for one High-Speed bulk max-packet (512 B),
+ * which also holds a single 512-byte mass-storage logical block, a 31-byte
+ * Command Block Wrapper or a 13-byte Command Status Wrapper.
+ */
+static uint8_t bulk_in_buf[512] __aligned(64) UHC_DMA_SECTION;
+static uint8_t bulk_out_buf[512] __aligned(64) UHC_DMA_SECTION;
 
 /* Isochronous IN/OUT transfer rings */
 #define ISOCH_RING_SIZE		32
@@ -2612,6 +2615,7 @@ int uhc_dwc3_setup_device(const struct device *dev,
 
 	/* Parse the config descriptor to find bulk endpoints */
 	uint8_t bulk_in = 0, bulk_out = 0;
+	uint16_t bulk_mps = 64;
 	int offset = 0;
 
 	while (offset < ret) {
@@ -2644,6 +2648,7 @@ int uhc_dwc3_setup_device(const struct device *dev,
 				} else {
 					bulk_out = ep_addr;
 				}
+				bulk_mps = ep_mps;
 			}
 		}
 
@@ -2673,8 +2678,10 @@ int uhc_dwc3_setup_device(const struct device *dev,
 	/* Step 7: Configure Endpoint (xHCI) */
 	LOG_INF("=== Step 7: Configure Endpoints ===");
 
-	/* Use MPS=64 for Full Speed bulk endpoints */
-	ret = xhci_configure_endpoint(cfg, slot_id, bulk_in, bulk_out, 64);
+	/* Use the max packet size advertised by the endpoint descriptor
+	 * (64 for Full Speed, 512 for High Speed bulk).
+	 */
+	ret = xhci_configure_endpoint(cfg, slot_id, bulk_in, bulk_out, bulk_mps);
 	if (ret) {
 		return ret;
 	}
