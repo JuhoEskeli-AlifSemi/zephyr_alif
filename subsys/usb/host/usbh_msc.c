@@ -33,21 +33,10 @@
 #include <zephyr/sys/util.h>
 #include <zephyr/usb/usb_ch9.h>
 #include <zephyr/usb/host/msc.h>
+#include <zephyr/drivers/usb/uhc_dwc3.h>
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(usbh_msc, CONFIG_USBH_LOG_LEVEL);
-
-/* ---- DWC3 host controller synchronous helpers (see file header) ---- */
-int uhc_dwc3_setup_device(const struct device *dev,
-			  struct usb_device_descriptor *desc,
-			  uint8_t *out_bulk_in_ep,
-			  uint8_t *out_bulk_out_ep);
-int uhc_dwc3_bulk_out(const struct device *dev, const uint8_t *data, size_t len);
-int uhc_dwc3_bulk_in(const struct device *dev, uint8_t *data, size_t len);
-int uhc_dwc3_control_transfer(const struct device *dev,
-			      uint8_t bmRequestType, uint8_t bRequest,
-			      uint16_t wValue, uint16_t wIndex,
-			      uint16_t wLength, void *data);
 
 /* ---- USB Mass Storage class (BOT + SCSI transparent) ---- */
 #define MSC_IF_CLASS		0x08

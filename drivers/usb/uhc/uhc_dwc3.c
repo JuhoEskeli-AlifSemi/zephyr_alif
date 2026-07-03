@@ -32,6 +32,7 @@
 #include <zephyr/irq.h>
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/drivers/usb/uhc.h>
+#include <zephyr/drivers/usb/uhc_dwc3.h>
 #include <zephyr/drivers/clock_control.h>
 #include <zephyr/usb/usb_ch9.h>
 
