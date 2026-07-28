@@ -1,0 +1,26 @@
+/*
+ * Copyright (c) 2026 Alif Semiconductor.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Ethernet enablement for zperf on the Alif E7 DevKit (RTSS-HP core).
+ * The link is forced to 100 Mbps full-duplex for deterministic,
+ * point-to-point (direct PC-to-board) throughput measurements.
+ */
+
+&ns {
+	status = "okay";
+};
+
+&ethernet {
+	status = "okay";
+};
+
+&mdio {
+	status = "okay";
+};
+
+&ethernet_phy {
+	status = "okay";
+	phy_mode = "PHY_FULL_DUPLEX";
+	phy_speed = "PHY_SPEED_100M";
+};
