@@ -58,6 +58,10 @@ config APSS
 	select GIC_V2
 	select PINCTRL
 	select CLOCK_CONTROL
+	select HAS_ALIF_SE_SERVICES
+	select CPU_HAS_DCACHE
+	select CPU_HAS_ICACHE
+	select CACHE_MANAGEMENT
 
 config ENSEMBLE_GEN2
 	bool
