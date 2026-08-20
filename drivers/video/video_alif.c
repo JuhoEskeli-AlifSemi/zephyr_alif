@@ -439,9 +439,11 @@ static int alif_cam_set_fmt(const struct device *dev, enum video_endpoint_id ep,
 
 	if (fmt->pixelformat == VIDEO_PIX_FMT_JPEG) {
 		/*
-		 * For JPEG: configure CPI for worst-case buffer size.
-		 * JPEG compressed size is unknown, so set max frame
-		 * dimensions. App will scan for EOI marker and stop.
+		 * For JPEG: program the full-frame raster as a default. JPEG
+		 * compressed size is unknown, so the app scans for the EOI
+		 * marker to find the real length. The row count is later
+		 * clamped per buffer in alif_cam_enqueue() so the DMA cannot
+		 * overrun a buffer smaller than the full raster.
 		 * Use pitch as row width (bytes per row in buffer).
 		 */
 		uint32_t max_rows = (fmt->pitch * fmt->height) / fmt->pitch;
@@ -761,6 +763,33 @@ static int alif_cam_enqueue(const struct device *dev, enum video_endpoint_id ep,
 	}
 
 	to_read = data->current_format.pitch * data->current_format.height;
+
+	if (data->is_jpeg && data->current_format.pitch) {
+		/*
+		 * JPEG size is data-dependent, so a large frame could overrun
+		 * this buffer. The CPI is not an unbounded writer: it stops
+		 * after the CAM_VIDEO_FCFG row count. Clamp that row count to
+		 * what fits in buf->size so the DMA cannot write past the
+		 * buffer; an over-long frame is truncated (no EOI) and dropped
+		 * by the caller instead of corrupting neighbouring memory.
+		 */
+		uintptr_t regs = DEVICE_MMIO_GET(dev);
+		uint32_t pitch = data->current_format.pitch;
+		uint32_t max_rows = MIN(data->current_format.height,
+					buf->size / pitch);
+
+		sys_write32((((max_rows - 1) & CAM_VIDEO_FCFG_ROW_MASK)
+			     << CAM_VIDEO_FCFG_ROW_SHIFT) |
+			    ((pitch & CAM_VIDEO_FCFG_DATA_MASK)
+			     << CAM_VIDEO_FCFG_DATA_SHIFT),
+			    regs + CAM_VIDEO_FCFG);
+
+		to_read = max_rows * pitch;
+
+		LOG_DBG("JPEG row clamp: max_rows=%u (height=%u) buf=%u to_read=%u",
+			max_rows, data->current_format.height, buf->size, to_read);
+	}
+
 	buf->bytesused = to_read;
 
 	k_fifo_put(&data->fifo_in, buf);
