@@ -106,6 +106,74 @@ int uhc_dwc3_bulk_in(const struct device *dev,
 		     uint8_t *data, size_t len);
 
 /**
+ * @brief Required alignment of buffers passed to uhc_dwc3_bulk_in_submit()
+ *
+ * Both the buffer address and its length must be a multiple of this, so
+ * the cache maintenance on the buffer covers whole cache lines.
+ */
+#define UHC_DWC3_BUF_ALIGN 64
+
+/**
+ * @brief Configure a lone bulk IN endpoint
+ *
+ * For devices whose interface has a bulk IN endpoint without a bulk OUT
+ * partner, such as a bulk USB Video Class streaming interface. Call after
+ * uhc_dwc3_enumerate_device() and SET_CONFIGURATION. The endpoint becomes
+ * the target of uhc_dwc3_bulk_in() and uhc_dwc3_bulk_in_submit(); any
+ * transfers still queued from an earlier configuration are discarded.
+ *
+ * @param dev UHC device
+ * @param ep  Bulk IN endpoint address (bit 7 set)
+ * @param mps Endpoint max packet size (wMaxPacketSize)
+ * @return 0 on success, negative errno on failure
+ */
+int uhc_dwc3_configure_bulk_in(const struct device *dev, uint8_t ep,
+			       uint16_t mps);
+
+/**
+ * @brief Queue a bulk IN transfer into a caller buffer
+ *
+ * The controller receives straight into @p buf, without a bounce copy, so
+ * several transfers can be kept in flight. Each completes when @p len
+ * bytes have arrived or the device ends the transfer with a short packet;
+ * collect completions in submission order with uhc_dwc3_bulk_in_reap().
+ * Do not mix with uhc_dwc3_bulk_in() while transfers are queued.
+ *
+ * @p buf must be reachable by the controller's DMA (not in TCM), and must
+ * not be accessed until the transfer is reaped.
+ *
+ * @param dev UHC device
+ * @param buf Destination buffer, aligned to @ref UHC_DWC3_BUF_ALIGN, not
+ *            crossing a 64 KiB address boundary
+ * @param len Bytes to receive: a multiple of @ref UHC_DWC3_BUF_ALIGN and of
+ *            the endpoint max packet size, at most 64 KiB
+ * @retval 0 Transfer queued
+ * @retval -EINVAL Invalid buffer, length or no bulk IN endpoint configured
+ * @retval -ENOMEM Too many transfers queued (the limit is 8)
+ */
+int uhc_dwc3_bulk_in_submit(const struct device *dev, uint8_t *buf,
+			    size_t len);
+
+/**
+ * @brief Wait for the oldest queued bulk IN transfer to complete
+ *
+ * On -EIO the endpoint has halted and the transfers still queued will not
+ * complete; enumerate and configure the device again to recover.
+ *
+ * @param dev        UHC device
+ * @param buf        Output: buffer of the completed transfer
+ * @param timeout_ms Time to wait for the completion
+ * @return number of bytes received on success (less than the submitted
+ *         length when the device sent a short packet)
+ * @retval -ENOENT No transfer queued
+ * @retval -EAGAIN Timed out; the transfer stays queued and can be reaped
+ *                 again
+ * @retval -EIO    Transfer failed (@p buf is still returned)
+ */
+int uhc_dwc3_bulk_in_reap(const struct device *dev, uint8_t **buf,
+			  int timeout_ms);
+
+/**
  * @brief Configure isochronous endpoints for audio streaming
  *
  * @param dev           UHC device

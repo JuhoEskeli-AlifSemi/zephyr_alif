@@ -241,6 +241,22 @@ static uint8_t bulk_out_enq;
 static uint8_t bulk_in_buf[512] __aligned(64) UHC_DMA_SECTION;
 static uint8_t bulk_out_buf[512] __aligned(64) UHC_DMA_SECTION;
 
+/* Queued bulk IN transfers (uhc_dwc3_bulk_in_submit/_reap) into caller
+ * buffers, kept in submission order. Each is a single Normal TRB, so the
+ * queue must stay well below BULK_RING_SIZE.
+ */
+#define BULK_IN_QUEUE_DEPTH	8
+
+struct bulk_in_req {
+	uint8_t *buf;
+	uint32_t len;
+	struct xhci_trb *trb;
+};
+
+static struct bulk_in_req bulk_in_reqs[BULK_IN_QUEUE_DEPTH];
+static uint8_t bulk_in_req_head;
+static uint8_t bulk_in_req_count;
+
 /* Isochronous IN/OUT transfer rings */
 #define ISOCH_RING_SIZE		32
 static struct xhci_trb isoch_in_ring[ISOCH_RING_SIZE + 1] __aligned(64) UHC_DMA_SECTION;
@@ -1442,17 +1458,19 @@ static int xhci_configure_endpoint(const struct uhc_dwc3_config *cfg,
 {
 	struct xhci_trb *evt;
 	uint8_t dci_in = ep_to_dci(bulk_in_ep);
-	uint8_t dci_out = ep_to_dci(bulk_out_ep);
+	uint8_t dci_out = bulk_out_ep ? ep_to_dci(bulk_out_ep) : 0;
 	uint8_t max_dci = (dci_in > dci_out) ? dci_in : dci_out;
 
 	LOG_INF("Configure EP: in=0x%02x(DCI=%u) out=0x%02x(DCI=%u) MPS=%u",
 		bulk_in_ep, dci_in, bulk_out_ep, dci_out, max_packet_size);
 
-	/* Init bulk rings */
+	/* Init bulk rings; any queued bulk IN transfers are discarded */
 	bulk_in_ring_init();
 	bulk_out_ring_init();
 	sys_cache_data_flush_range(bulk_in_ring, sizeof(bulk_in_ring));
 	sys_cache_data_flush_range(bulk_out_ring, sizeof(bulk_out_ring));
+	bulk_in_req_head = 0;
+	bulk_in_req_count = 0;
 
 	/* Build Input Context */
 	memset(input_ctx_buf, 0, sizeof(input_ctx_buf));
@@ -1460,7 +1478,10 @@ static int xhci_configure_endpoint(const struct uhc_dwc3_config *cfg,
 	/* Input Control Context: add Slot + bulk EP contexts */
 	struct xhci_input_ctrl_ctx *icc = (void *)input_ctx_buf;
 
-	icc->add_flags = BIT(0) | BIT(dci_in) | BIT(dci_out);
+	icc->add_flags = BIT(0) | BIT(dci_in);
+	if (dci_out) {
+		icc->add_flags |= BIT(dci_out);
+	}
 
 	/* Slot Context: update Context Entries to include new endpoints */
 	uint32_t *slot = (uint32_t *)(input_ctx_buf + 64);
@@ -1482,14 +1503,16 @@ static int xhci_configure_endpoint(const struct uhc_dwc3_config *cfg,
 	ep_in[4] = 0; /* Average TRB Length (0 = let HW decide) */
 
 	/* Bulk OUT EP Context */
-	uint32_t *ep_out = (uint32_t *)(input_ctx_buf + 64 * (1 + dci_out));
+	if (dci_out) {
+		uint32_t *ep_out = (uint32_t *)(input_ctx_buf + 64 * (1 + dci_out));
 
-	ep_out[1] = (3 << 1) |
-		    (XHCI_EP_TYPE_BULK_OUT << 3) |
-		    (max_packet_size << 16);
-	ep_out[2] = (uint32_t)bulk_out_ring | 1;
-	ep_out[3] = 0;
-	ep_out[4] = 0;
+		ep_out[1] = (3 << 1) |
+			    (XHCI_EP_TYPE_BULK_OUT << 3) |
+			    (max_packet_size << 16);
+		ep_out[2] = (uint32_t)bulk_out_ring | 1;
+		ep_out[3] = 0;
+		ep_out[4] = 0;
+	}
 
 	sys_cache_data_flush_range(input_ctx_buf, sizeof(input_ctx_buf));
 
@@ -1609,6 +1632,113 @@ static int xhci_bulk_transfer_in(const struct uhc_dwc3_config *cfg,
 	}
 
 	return received;
+}
+
+/* ---- Queued bulk IN transfers into caller buffers ----
+ *
+ * Each request is one Normal TRB transferring straight into the caller's
+ * buffer (no bounce copy). Keeping several queued lets the controller keep
+ * polling the endpoint while earlier requests are being processed, which a
+ * streaming device (e.g. a bulk USB Video Class camera) needs for throughput.
+ * A short packet completes the request it lands in; the next request then
+ * receives the data that follows.
+ */
+static int xhci_bulk_in_submit(const struct uhc_dwc3_config *cfg,
+			       uint8_t slot_id, uint8_t ep_addr,
+			       uint8_t *buf, size_t len)
+{
+	uintptr_t addr = (uintptr_t)buf;
+	struct bulk_in_req *req;
+
+	if (ep_addr == 0) {
+		return -EINVAL;
+	}
+
+	/* One TRB may carry at most 64 KiB and must not cross a 64 KiB
+	 * boundary; whole cache lines keep the invalidates below from
+	 * touching neighbouring data.
+	 */
+	if (len == 0 || len > 0x10000 || ((addr & 0xFFFF) + len) > 0x10000 ||
+	    !IS_ALIGNED(addr, UHC_DWC3_BUF_ALIGN) ||
+	    !IS_ALIGNED(len, UHC_DWC3_BUF_ALIGN)) {
+		return -EINVAL;
+	}
+
+	if (bulk_in_req_count >= BULK_IN_QUEUE_DEPTH) {
+		return -ENOMEM;
+	}
+
+	/* Drop any cached lines so none is written back over the DMA data */
+	sys_cache_data_invd_range(buf, len);
+
+	req = &bulk_in_reqs[(bulk_in_req_head + bulk_in_req_count) %
+			    BULK_IN_QUEUE_DEPTH];
+	req->buf = buf;
+	req->len = len;
+	req->trb = &bulk_in_ring[bulk_in_enq];
+	bulk_in_req_count++;
+
+	bulk_ring_enqueue(bulk_in_ring, BULK_RING_SIZE,
+			  &bulk_in_cycle, &bulk_in_enq,
+			  (uint32_t)buf, 0, (uint32_t)len,
+			  TRB_TYPE(TRB_NORMAL) | TRB_IOC);
+
+	xhci_ring_doorbell(cfg, slot_id, ep_to_dci(ep_addr));
+
+	return 0;
+}
+
+static int xhci_bulk_in_reap(const struct uhc_dwc3_config *cfg,
+			     uint8_t **buf, int timeout_ms)
+{
+	struct bulk_in_req *req;
+	struct xhci_trb *evt;
+	uint8_t comp;
+	uint32_t residual;
+
+	if (bulk_in_req_count == 0) {
+		return -ENOENT;
+	}
+
+	req = &bulk_in_reqs[bulk_in_req_head];
+
+	/* Completions arrive in submission order; skip anything else */
+	while (true) {
+		evt = evt_ring_wait(cfg, timeout_ms);
+		if (evt == NULL) {
+			return -EAGAIN;
+		}
+
+		if (TRB_TYPE_GET(evt->control) == TRB_TRANSFER_EVENT &&
+		    evt->param_lo == (uint32_t)req->trb) {
+			break;
+		}
+
+		LOG_DBG("Bulk IN: skipping event type=%u ptr=0x%08x",
+			TRB_TYPE_GET(evt->control), evt->param_lo);
+		evt_ring_advance();
+		evt_ring_update_erdp(cfg);
+	}
+
+	comp = TRB_COMP_CODE(evt->status);
+	residual = evt->status & 0xFFFFFF;
+
+	evt_ring_advance();
+	evt_ring_update_erdp(cfg);
+
+	bulk_in_req_head = (bulk_in_req_head + 1) % BULK_IN_QUEUE_DEPTH;
+	bulk_in_req_count--;
+
+	*buf = req->buf;
+
+	if (comp != TRB_COMP_SUCCESS && comp != TRB_COMP_SHORT_PKT) {
+		LOG_ERR("Bulk IN failed: comp=%u", comp);
+		return -EIO;
+	}
+
+	sys_cache_data_invd_range(req->buf, req->len);
+
+	return (int)(req->len - residual);
 }
 
 /* ---- Isochronous endpoint configuration ---- */
@@ -2709,6 +2839,56 @@ int uhc_dwc3_bulk_in(const struct device *dev,
 
 	return xhci_bulk_transfer_in(cfg, priv->slot_id,
 				     priv->bulk_in_ep, data, len);
+}
+
+/*
+ * Configure a lone bulk IN endpoint (e.g. a bulk video streaming endpoint)
+ * on the device enumerated by uhc_dwc3_enumerate_device().
+ */
+int uhc_dwc3_configure_bulk_in(const struct device *dev, uint8_t ep,
+			       uint16_t mps)
+{
+	const struct uhc_dwc3_config *cfg = dev->config;
+	struct uhc_dwc3_data *priv = uhc_get_private(dev);
+	int ret;
+
+	if (!(ep & 0x80)) {
+		return -EINVAL;
+	}
+
+	ret = xhci_configure_endpoint(cfg, priv->slot_id, ep, 0, mps);
+	if (ret) {
+		return ret;
+	}
+
+	priv->bulk_in_ep = ep;
+	priv->bulk_out_ep = 0;
+
+	return 0;
+}
+
+/*
+ * Queue a bulk IN transfer into a caller buffer.
+ */
+int uhc_dwc3_bulk_in_submit(const struct device *dev, uint8_t *buf,
+			    size_t len)
+{
+	const struct uhc_dwc3_config *cfg = dev->config;
+	struct uhc_dwc3_data *priv = uhc_get_private(dev);
+
+	return xhci_bulk_in_submit(cfg, priv->slot_id, priv->bulk_in_ep,
+				   buf, len);
+}
+
+/*
+ * Wait for the oldest queued bulk IN transfer to complete.
+ */
+int uhc_dwc3_bulk_in_reap(const struct device *dev, uint8_t **buf,
+			  int timeout_ms)
+{
+	const struct uhc_dwc3_config *cfg = dev->config;
+
+	return xhci_bulk_in_reap(cfg, buf, timeout_ms);
 }
 
 /*
