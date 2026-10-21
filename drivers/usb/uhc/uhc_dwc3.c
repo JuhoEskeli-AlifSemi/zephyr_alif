@@ -219,8 +219,10 @@ static uint8_t dev_ctx_buf[32 * 64] __aligned(64) UHC_DMA_SECTION;
 /* Input Context (Input Control + Slot + 31 EPs, each 64 bytes) */
 static uint8_t input_ctx_buf[33 * 64] __aligned(64) UHC_DMA_SECTION;
 
-/* Data buffer for USB control transfers (audio config descriptors can exceed 256 bytes) */
-static uint8_t xfer_data_buf[512] __aligned(64) UHC_DMA_SECTION;
+/* Data buffer for USB control transfers. Audio and video class configuration
+ * descriptors routinely exceed 512 bytes (a webcam's can be several KiB).
+ */
+static uint8_t xfer_data_buf[2048] __aligned(64) UHC_DMA_SECTION;
 
 /* Bulk IN/OUT transfer rings */
 #define BULK_RING_SIZE		16
@@ -599,6 +601,12 @@ static int xhci_control_transfer(const struct uhc_dwc3_config *cfg,
 {
 	struct xhci_trb *evt;
 	bool is_in = (bmRequestType & 0x80) != 0;
+
+	if (wLength > sizeof(xfer_data_buf)) {
+		LOG_ERR("Control transfer too long: %u > %u", wLength,
+			(unsigned int)sizeof(xfer_data_buf));
+		return -EINVAL;
+	}
 
 	if (wLength > 0 && data != NULL) {
 		if (!is_in) {
@@ -2581,12 +2589,12 @@ int uhc_dwc3_setup_device(const struct device *dev,
 
 	LOG_INF("Config descriptor: total_len=%u num_ifaces=%u", total_len, cfg_hdr[4]);
 
-	if (total_len > sizeof(xfer_data_buf)) {
-		total_len = sizeof(xfer_data_buf);
-	}
-
 	/* Now get the full configuration descriptor */
 	uint8_t full_cfg[256];
+
+	if (total_len > sizeof(full_cfg)) {
+		total_len = sizeof(full_cfg);
+	}
 
 	ret = xhci_control_transfer(cfg, slot_id,
 				    0x80, 0x06, 0x0200, 0, total_len, full_cfg);

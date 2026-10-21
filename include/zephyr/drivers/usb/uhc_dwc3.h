@@ -70,9 +70,10 @@ int uhc_dwc3_setup_device(const struct device *dev,
  * @param bRequest      bRequest field
  * @param wValue        wValue field
  * @param wIndex        wIndex field
- * @param wLength       wLength field / data buffer length
+ * @param wLength       wLength field / data buffer length, at most 2048
  * @param data          Data buffer (may be NULL when wLength is 0)
  * @return number of bytes transferred on success, negative errno on failure
+ * @retval -EINVAL wLength exceeds the driver's control transfer buffer
  */
 int uhc_dwc3_control_transfer(const struct device *dev,
 			      uint8_t bmRequestType,
