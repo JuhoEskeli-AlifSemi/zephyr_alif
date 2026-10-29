@@ -126,11 +126,13 @@ struct xhci_trb {
 
 /* TRB control flags */
 #define TRB_CYCLE		BIT(0)
+#define TRB_ISP			BIT(2)   /* Interrupt on Short Packet */
 #define TRB_IOC			BIT(5)   /* Interrupt on Completion */
 #define TRB_IDT			BIT(6)   /* Immediate Data */
 #define TRB_BSR			BIT(9)   /* Block Set Address Request */
 #define TRB_DIR_IN		BIT(16)  /* Data direction for Setup TRB */
 #define TRB_SIA			BIT(31)  /* Start Isoch ASAP (Isoch TRB) */
+#define TRB_TLBPC(n)		(((n) & 0xF) << 16) /* Isoch: last burst packets - 1 */
 #define TRB_TRT_NO_DATA		0
 #define TRB_TRT_OUT		(2 << 16)
 #define TRB_TRT_IN		(3 << 16)
@@ -141,6 +143,7 @@ struct xhci_trb {
 #define TRB_COMP_SHORT_PKT	13
 #define TRB_COMP_RING_UNDERRUN	14  /* Isoch OUT: no TRB available */
 #define TRB_COMP_RING_OVERRUN	15  /* Isoch IN: no TRB available */
+#define TRB_COMP_MISSED_SERVICE	23  /* Isoch: TD not serviced in its interval */
 
 /* ---- xHCI Slot/Endpoint Context (64 bytes each when CSZ=1) ---- */
 struct xhci_slot_ctx {
@@ -260,7 +263,7 @@ static uint8_t bulk_in_req_head;
 static uint8_t bulk_in_req_count;
 
 /* Isochronous IN/OUT transfer rings */
-#define ISOCH_RING_SIZE		32
+#define ISOCH_RING_SIZE		64
 static struct xhci_trb isoch_in_ring[ISOCH_RING_SIZE + 1] __aligned(64) UHC_DMA_SECTION;
 static uint8_t isoch_in_cycle = 1;
 static uint8_t isoch_in_enq;
@@ -268,6 +271,24 @@ static uint8_t isoch_in_enq;
 static struct xhci_trb isoch_out_ring[ISOCH_RING_SIZE + 1] __aligned(64) UHC_DMA_SECTION;
 static uint8_t isoch_out_cycle = 1;
 static uint8_t isoch_out_enq;
+
+/* Queued isochronous IN transfers (uhc_dwc3_isoch_in_submit/_reap) into
+ * caller buffers, kept in submission order. Each is a single Isoch TRB that
+ * covers one service interval, so on High Speed the queue holds 4 ms.
+ */
+#define ISOCH_IN_QUEUE_DEPTH	32
+
+struct isoch_in_req {
+	uint8_t *buf;
+	uint32_t len;
+	struct xhci_trb *trb;
+};
+
+static struct isoch_in_req isoch_in_reqs[ISOCH_IN_QUEUE_DEPTH];
+static uint8_t isoch_in_req_head;
+static uint8_t isoch_in_req_count;
+static uint16_t isoch_in_mps;	/* wMaxPacketSize bits 10:0 */
+static uint32_t isoch_in_esit;	/* Bytes per service interval */
 
 /* Isochronous data buffers — quad-buffered for click-free streaming.
  * With 4 TRBs queued ahead at 1ms interval, we have 3ms of headroom
@@ -1863,6 +1884,230 @@ static int xhci_configure_isoch_endpoint(const struct uhc_dwc3_config *cfg,
 	return 0;
 }
 
+/*
+ * Configure a lone isochronous IN endpoint for the queued streaming API,
+ * e.g. for a USB Video Class camera. Unlike xhci_configure_isoch_endpoint()
+ * this handles High-Speed high-bandwidth endpoints: the additional
+ * transactions per microframe (wMaxPacketSize bits 12:11) become the Max
+ * Burst Size, and the Max ESIT Payload covers all of them.
+ */
+static int xhci_configure_isoch_in(const struct uhc_dwc3_config *cfg,
+				   uint8_t slot_id, uint8_t ep_addr,
+				   uint16_t mps, uint8_t burst,
+				   uint8_t interval)
+{
+	struct xhci_trb *evt;
+	uint8_t dci = ep_to_dci(ep_addr);
+	uint32_t esit = (uint32_t)mps * (burst + 1);
+
+	LOG_INF("Configure Isoch IN EP 0x%02x(DCI=%u): MPS=%u x%u, interval %u",
+		ep_addr, dci, mps, burst + 1, interval);
+
+	/* Any queued transfers are discarded */
+	isoch_in_ring_init();
+	sys_cache_data_flush_range(isoch_in_ring, sizeof(isoch_in_ring));
+	isoch_in_req_head = 0;
+	isoch_in_req_count = 0;
+
+	memset(input_ctx_buf, 0, sizeof(input_ctx_buf));
+
+	struct xhci_input_ctrl_ctx *icc = (void *)input_ctx_buf;
+
+	icc->add_flags = BIT(0) | BIT(dci);
+
+	/* Slot Context: Context Entries must cover the new endpoint */
+	uint32_t *slot = (uint32_t *)(input_ctx_buf + 64);
+	uint8_t entries;
+
+	sys_cache_data_invd_range(dev_ctx_buf, sizeof(dev_ctx_buf));
+	memcpy(slot, dev_ctx_buf, 64);
+	entries = MAX((slot[0] >> 27) & 0x1F, dci);
+	slot[0] = (slot[0] & ~(0x1F << 27)) | ((uint32_t)entries << 27);
+
+	uint32_t *ep = (uint32_t *)(input_ctx_buf + 64 * (1 + dci));
+
+	ep[0] = ((uint32_t)interval << 16);
+	ep[1] = (0 << 1) |			/* CErr=0 for isoch */
+		(XHCI_EP_TYPE_ISOCH_IN << 3) |
+		((uint32_t)burst << 8) |
+		((uint32_t)mps << 16);
+	ep[2] = (uint32_t)isoch_in_ring | 1;	/* DCS=1 */
+	ep[3] = 0;
+	ep[4] = (esit << 16) | esit;		/* Max ESIT Payload, Avg TRB Length */
+
+	sys_cache_data_flush_range(input_ctx_buf, sizeof(input_ctx_buf));
+
+	cmd_ring_enqueue((uint32_t)input_ctx_buf, 0, 0,
+			 TRB_TYPE(TRB_CONFIG_EP) | (slot_id << 24));
+
+	xhci_ring_doorbell(cfg, 0, 0);
+
+	evt = evt_ring_wait(cfg, 5000);
+	if (evt == NULL) {
+		LOG_ERR("Configure Isoch IN EP: no completion event");
+		return -ETIMEDOUT;
+	}
+
+	uint8_t comp = TRB_COMP_CODE(evt->status);
+
+	evt_ring_advance();
+	evt_ring_update_erdp(cfg);
+
+	if (comp != TRB_COMP_SUCCESS) {
+		LOG_ERR("Configure Isoch IN EP failed: comp=%u", comp);
+		return -EIO;
+	}
+
+	/* The audio streaming paths turn the interrupter off; the queued
+	 * transfers wait for their events on it.
+	 */
+	xhci_op_write(cfg, XHCI_USBCMD,
+		      xhci_op_read(cfg, XHCI_USBCMD) | XHCI_CMD_INTE);
+
+	return 0;
+}
+
+/*
+ * Queue one isochronous IN transfer (one service interval) into a caller
+ * buffer. Every TRB has SIA set, so each is scheduled in the interval after
+ * the previous one, and the controller restarts the stream at the next
+ * interval if the ring ran dry.
+ */
+static int xhci_isoch_in_submit(const struct uhc_dwc3_config *cfg,
+				uint8_t slot_id, uint8_t ep_addr,
+				uint8_t *buf, size_t len)
+{
+	uintptr_t addr = (uintptr_t)buf;
+	struct isoch_in_req *req;
+	uint32_t tlbpc;
+
+	if (ep_addr == 0 || isoch_in_mps == 0) {
+		return -EINVAL;
+	}
+
+	if (len == 0 || len > isoch_in_esit ||
+	    ((addr & 0xFFFF) + len) > 0x10000 ||
+	    !IS_ALIGNED(addr, UHC_DWC3_BUF_ALIGN)) {
+		return -EINVAL;
+	}
+
+	if (isoch_in_req_count >= ISOCH_IN_QUEUE_DEPTH) {
+		return -ENOMEM;
+	}
+
+	/* Drop any cached lines so none is written back over the DMA data */
+	sys_cache_data_invd_range(buf, ROUND_UP(len, UHC_DWC3_BUF_ALIGN));
+
+	req = &isoch_in_reqs[(isoch_in_req_head + isoch_in_req_count) %
+			     ISOCH_IN_QUEUE_DEPTH];
+	req->buf = buf;
+	req->len = len;
+	req->trb = &isoch_in_ring[isoch_in_enq];
+	isoch_in_req_count++;
+
+	/* On High and Full Speed all packets of the TD form one burst:
+	 * TBC = 0 and TLBPC = packets - 1 (xHCI 4.11.2.3).
+	 */
+	tlbpc = DIV_ROUND_UP(len, isoch_in_mps) - 1;
+
+	bulk_ring_enqueue(isoch_in_ring, ISOCH_RING_SIZE,
+			  &isoch_in_cycle, &isoch_in_enq,
+			  (uint32_t)buf, 0, (uint32_t)len,
+			  TRB_TYPE(TRB_ISOCH) | TRB_TLBPC(tlbpc) |
+			  TRB_ISP | TRB_IOC | TRB_SIA);
+
+	xhci_ring_doorbell(cfg, slot_id, ep_to_dci(ep_addr));
+
+	return 0;
+}
+
+/* Is a TRB that of a queued isochronous IN transfer after the oldest one? */
+static bool isoch_in_later_req(uint32_t trb_addr)
+{
+	for (int i = 1; i < isoch_in_req_count; i++) {
+		const struct isoch_in_req *req =
+			&isoch_in_reqs[(isoch_in_req_head + i) %
+				       ISOCH_IN_QUEUE_DEPTH];
+
+		if ((uint32_t)req->trb == trb_addr) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static int xhci_isoch_in_reap(const struct uhc_dwc3_config *cfg,
+			      uint8_t **buf, int timeout_ms)
+{
+	struct isoch_in_req *req;
+	struct xhci_trb *evt;
+	uint8_t comp;
+	uint32_t residual;
+
+	if (isoch_in_req_count == 0) {
+		return -ENOENT;
+	}
+
+	req = &isoch_in_reqs[isoch_in_req_head];
+
+	while (true) {
+		evt = evt_ring_wait(cfg, timeout_ms);
+		if (evt == NULL) {
+			return -EAGAIN;
+		}
+
+		if (TRB_TYPE_GET(evt->control) == TRB_TRANSFER_EVENT) {
+			if (evt->param_lo == (uint32_t)req->trb) {
+				break;
+			}
+
+			/* An event for a later transfer: the controller
+			 * skipped this one. Leave the event for its transfer.
+			 */
+			if (isoch_in_later_req(evt->param_lo)) {
+				isoch_in_req_head = (isoch_in_req_head + 1) %
+						    ISOCH_IN_QUEUE_DEPTH;
+				isoch_in_req_count--;
+				*buf = req->buf;
+				return -ENODATA;
+			}
+		}
+
+		/* Missed Service and Ring Overrun events need not point at a
+		 * transfer; the transfers they concern are skipped above.
+		 */
+		LOG_DBG("Isoch IN: skipping event type=%u comp=%u ptr=0x%08x",
+			TRB_TYPE_GET(evt->control), TRB_COMP_CODE(evt->status),
+			evt->param_lo);
+		evt_ring_advance();
+		evt_ring_update_erdp(cfg);
+	}
+
+	comp = TRB_COMP_CODE(evt->status);
+	residual = evt->status & 0xFFFFFF;
+
+	evt_ring_advance();
+	evt_ring_update_erdp(cfg);
+
+	isoch_in_req_head = (isoch_in_req_head + 1) % ISOCH_IN_QUEUE_DEPTH;
+	isoch_in_req_count--;
+
+	*buf = req->buf;
+
+	if (comp == TRB_COMP_MISSED_SERVICE) {
+		return -ENODATA;
+	} else if (comp != TRB_COMP_SUCCESS && comp != TRB_COMP_SHORT_PKT) {
+		LOG_DBG("Isoch IN failed: comp=%u", comp);
+		return -EIO;
+	}
+
+	sys_cache_data_invd_range(req->buf,
+				  ROUND_UP(req->len, UHC_DWC3_BUF_ALIGN));
+
+	return (int)(req->len - residual);
+}
+
 /* ---- Isochronous Transfers ---- */
 
 /*
@@ -2961,6 +3206,66 @@ int uhc_dwc3_isoch_out(const struct device *dev,
 /*
  * Receive audio data via isochronous IN transfer.
  */
+int uhc_dwc3_configure_isoch_in(const struct device *dev, uint8_t ep,
+				uint16_t mps, uint8_t interval)
+{
+	const struct uhc_dwc3_config *cfg = dev->config;
+	struct uhc_dwc3_data *priv = uhc_get_private(dev);
+	uint16_t pkt = mps & 0x7FF;
+	uint8_t burst = (mps >> 11) & 0x3;
+	uint8_t xhci_interval;
+	int ret;
+
+	if (!(ep & 0x80) || pkt == 0 || burst == 3 || interval < 1 ||
+	    interval > 16) {
+		return -EINVAL;
+	}
+
+	/* xHCI takes the interval as 2^Interval microframes; bInterval is
+	 * 2^(bInterval - 1) microframes on High Speed and frames on Full
+	 * Speed, which has no additional transactions.
+	 */
+	if (priv_port_speed == XHCI_SPEED_HS) {
+		xhci_interval = interval - 1;
+	} else if (burst == 0) {
+		xhci_interval = interval + 2;
+	} else {
+		return -EINVAL;
+	}
+
+	isoch_in_mps = 0;
+
+	ret = xhci_configure_isoch_in(cfg, priv->slot_id, ep, pkt, burst,
+				      xhci_interval);
+	if (ret) {
+		return ret;
+	}
+
+	priv->isoch_in_ep = ep;
+	isoch_in_mps = pkt;
+	isoch_in_esit = (uint32_t)pkt * (burst + 1);
+
+	return 0;
+}
+
+int uhc_dwc3_isoch_in_submit(const struct device *dev, uint8_t *buf,
+			     size_t len)
+{
+	const struct uhc_dwc3_config *cfg = dev->config;
+	struct uhc_dwc3_data *priv = uhc_get_private(dev);
+
+	return xhci_isoch_in_submit(cfg, priv->slot_id, priv->isoch_in_ep,
+				    buf, len);
+}
+
+int uhc_dwc3_isoch_in_reap(const struct device *dev, uint8_t **buf,
+			   int timeout_ms)
+{
+	const struct uhc_dwc3_config *cfg = dev->config;
+
+	return xhci_isoch_in_reap(cfg, buf, timeout_ms);
+}
+
 int uhc_dwc3_isoch_in(const struct device *dev,
 		      uint8_t *data, size_t len)
 {

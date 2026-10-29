@@ -183,6 +183,72 @@ int uhc_dwc3_bulk_in_reap(const struct device *dev, uint8_t **buf,
 			  int timeout_ms);
 
 /**
+ * @brief Configure a lone isochronous IN endpoint for queued streaming
+ *
+ * For a streaming device such as an isochronous USB Video Class camera.
+ * High-Speed high-bandwidth endpoints, with up to three packets per
+ * microframe, are supported. Call after SET_CONFIGURATION, then select the
+ * alternate setting that holds the endpoint with SET_INTERFACE. The
+ * endpoint becomes the target of uhc_dwc3_isoch_in_submit(); any transfers
+ * still queued are discarded.
+ *
+ * @param dev      UHC device
+ * @param ep       Isochronous IN endpoint address (bit 7 set)
+ * @param mps      wMaxPacketSize from the endpoint descriptor, including the
+ *                 additional transactions in bits 12:11
+ * @param interval bInterval from the endpoint descriptor
+ * @return 0 on success, negative errno on failure
+ */
+int uhc_dwc3_configure_isoch_in(const struct device *dev, uint8_t ep,
+				uint16_t mps, uint8_t interval);
+
+/**
+ * @brief Queue an isochronous IN transfer into a caller buffer
+ *
+ * Each transfer receives what the device sends in one service interval:
+ * up to wMaxPacketSize bits 10:0 times the number of transactions. Queued
+ * transfers are serviced in consecutive intervals; keep enough queued to
+ * cover the time between reaping and resubmitting them, as an interval
+ * with no transfer queued loses its data. Collect completions in
+ * submission order with uhc_dwc3_isoch_in_reap().
+ *
+ * @p buf must be reachable by the controller's DMA (not in TCM), and must
+ * not be accessed until the transfer is reaped.
+ *
+ * @param dev UHC device
+ * @param buf Destination buffer, aligned to @ref UHC_DWC3_BUF_ALIGN with room
+ *            for @p len rounded up to it, not crossing a 64 KiB address
+ *            boundary
+ * @param len Bytes to receive, at most the bytes per service interval
+ * @retval 0 Transfer queued
+ * @retval -EINVAL Invalid buffer, length or no isochronous IN endpoint
+ *                 configured
+ * @retval -ENOMEM Too many transfers queued (the limit is 32)
+ */
+int uhc_dwc3_isoch_in_submit(const struct device *dev, uint8_t *buf,
+			     size_t len);
+
+/**
+ * @brief Wait for the oldest queued isochronous IN transfer to complete
+ *
+ * The buffer is returned whatever the outcome, so it can be submitted
+ * again. A transfer that lost its data does not stop the stream.
+ *
+ * @param dev        UHC device
+ * @param buf        Output: buffer of the completed transfer
+ * @param timeout_ms Time to wait for the completion
+ * @return number of bytes received on success, 0 if the device sent no data
+ *         in that interval
+ * @retval -ENOENT  No transfer queued
+ * @retval -EAGAIN  Timed out; the transfer stays queued and can be reaped
+ *                  again
+ * @retval -ENODATA The controller missed the transfer's service interval
+ * @retval -EIO     The transfer failed, e.g. a transaction error
+ */
+int uhc_dwc3_isoch_in_reap(const struct device *dev, uint8_t **buf,
+			   int timeout_ms);
+
+/**
  * @brief Configure isochronous endpoints for audio streaming
  *
  * @param dev           UHC device
