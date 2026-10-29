@@ -63,6 +63,14 @@ int uhc_dwc3_setup_device(const struct device *dev,
 			  uint8_t *out_bulk_out_ep);
 
 /**
+ * @brief Largest data stage uhc_dwc3_control_transfer() can move
+ *
+ * Big enough for the configuration descriptor of a typical webcam, which
+ * lists every format and frame size.
+ */
+#define UHC_DWC3_CTRL_MAX_LEN 4096
+
+/**
  * @brief Perform an EP0 control transfer
  *
  * @param dev           UHC device
@@ -70,7 +78,8 @@ int uhc_dwc3_setup_device(const struct device *dev,
  * @param bRequest      bRequest field
  * @param wValue        wValue field
  * @param wIndex        wIndex field
- * @param wLength       wLength field / data buffer length, at most 2048
+ * @param wLength       wLength field / data buffer length, at most
+ *                      @ref UHC_DWC3_CTRL_MAX_LEN
  * @param data          Data buffer (may be NULL when wLength is 0)
  * @return number of bytes transferred on success, negative errno on failure
  * @retval -EINVAL wLength exceeds the driver's control transfer buffer

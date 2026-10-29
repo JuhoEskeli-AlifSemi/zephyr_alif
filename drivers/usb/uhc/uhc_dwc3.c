@@ -221,8 +221,10 @@ static uint8_t input_ctx_buf[33 * 64] __aligned(64) UHC_DMA_SECTION;
 
 /* Data buffer for USB control transfers. Audio and video class configuration
  * descriptors routinely exceed 512 bytes (a webcam's can be several KiB).
+ * Aligned to its size so the data stage TRB never crosses a 64 KiB boundary.
  */
-static uint8_t xfer_data_buf[2048] __aligned(64) UHC_DMA_SECTION;
+static uint8_t xfer_data_buf[UHC_DWC3_CTRL_MAX_LEN]
+	__aligned(UHC_DWC3_CTRL_MAX_LEN) UHC_DMA_SECTION;
 
 /* Bulk IN/OUT transfer rings */
 #define BULK_RING_SIZE		16
