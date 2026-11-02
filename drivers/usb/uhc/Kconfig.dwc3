@@ -18,4 +18,19 @@ config UHC_DWC3_THREAD_STACK_SIZE
 	help
 	  Size of the stack used for the DWC3 UHC transfer processing thread.
 
+config UVC_HOST
+	bool "USB Video Class host helpers for the DWC3 host controller"
+	help
+	  UVC configuration descriptor parsing, Probe/Commit format
+	  negotiation and frame reassembly from bulk or isochronous payloads,
+	  on top of the DWC3 host controller helpers (uhc_dwc3.h).
+
+if UVC_HOST
+
+module = UVC_HOST
+module-str = UVC host helpers
+source "subsys/logging/Kconfig.template.log_config"
+
+endif # UVC_HOST
+
 endif # UHC_DWC3
