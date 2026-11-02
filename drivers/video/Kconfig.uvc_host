@@ -1,0 +1,52 @@
+# Copyright (c) 2026 Alif Semiconductor
+# SPDX-License-Identifier: Apache-2.0
+
+config VIDEO_UVC_HOST
+	bool "USB Video Class camera on the DWC3 host controller"
+	default y
+	depends on DT_HAS_ALIF_UVC_HOST_ENABLED
+	depends on VIDEO && USB_HOST_STACK && UHC_DWC3
+	select UVC_HOST
+	select EVENTS
+	help
+	  Video device for a USB Video Class camera connected to the DWC3
+	  USB host port. The camera is enumerated when it is plugged in; its
+	  formats and frame sizes are then reported as the video
+	  capabilities. Bulk and isochronous (also High-Speed high-bandwidth)
+	  streaming endpoints are supported.
+
+if VIDEO_UVC_HOST
+
+config VIDEO_UVC_HOST_INIT_PRIORITY
+	int "Init priority"
+	default VIDEO_INIT_PRIORITY
+	help
+	  Device init priority (POST_KERNEL). Must be higher than that of the
+	  USB host controller.
+
+config VIDEO_UVC_HOST_THREAD_PRIORITY
+	int "Streaming thread priority"
+	default -5
+	help
+	  Priority of the thread that enumerates the camera and receives the
+	  stream. An isochronous stream loses data when the queued transfers
+	  are not resubmitted within 4 ms, so the default is a cooperative
+	  priority, which application threads cannot preempt.
+
+config VIDEO_UVC_HOST_THREAD_STACK_SIZE
+	int "Streaming thread stack size"
+	default 2048
+
+config VIDEO_UVC_HOST_CAPS_TIMEOUT_MS
+	int "Time video_get_caps() waits for a camera, in ms"
+	default 0
+	help
+	  The capabilities are only known once a camera has been enumerated.
+	  video_get_caps() waits up to this long for one, then returns
+	  -EAGAIN. 0 waits forever.
+
+module = VIDEO_UVC_HOST
+module-str = UVC host video device
+source "subsys/logging/Kconfig.template.log_config"
+
+endif # VIDEO_UVC_HOST

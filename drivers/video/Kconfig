@@ -92,4 +92,6 @@ source "drivers/video/Kconfig.dw"
 
 source "drivers/video/Kconfig.jpeg_hantro_vc9000e"
 
+source "drivers/video/Kconfig.uvc_host"
+
 endif # VIDEO

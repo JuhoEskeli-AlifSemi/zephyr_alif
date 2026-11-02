@@ -1,0 +1,25 @@
+# Copyright (c) 2026 Alif Semiconductor
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  USB Video Class camera connected to the DWC3 USB host controller.
+
+  The camera is enumerated when it is plugged in and is then available as a
+  video device. Only one instance is supported.
+
+  Example:
+
+    uvc_camera: uvc-camera {
+        compatible = "alif,uvc-host";
+        usb-controller = <&zephyr_uhc0>;
+    };
+
+compatible: "alif,uvc-host"
+
+include: base.yaml
+
+properties:
+  usb-controller:
+    type: phandle
+    required: true
+    description: USB host controller ("snps,dwc3-host") the camera is on.
