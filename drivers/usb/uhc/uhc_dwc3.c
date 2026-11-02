@@ -3378,7 +3378,8 @@ static const struct uhc_api dwc3_uhc_api = {
 	DEVICE_DT_INST_DEFINE(inst, uhc_dwc3_driver_init, NULL,			\
 			      &uhc_dwc3_data_##inst,				\
 			      &uhc_dwc3_cfg_##inst,				\
-			      POST_KERNEL, 99,					\
+			      POST_KERNEL,					\
+			      CONFIG_KERNEL_INIT_PRIORITY_DEVICE,		\
 			      &dwc3_uhc_api);
 
 DT_INST_FOREACH_STATUS_OKAY(UHC_DWC3_DEVICE_DEFINE)
