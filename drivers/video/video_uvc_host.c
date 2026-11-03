@@ -67,12 +67,13 @@ BUILD_ASSERT(DT_NUM_INST_STATUS_OKAY(DT_DRV_COMPAT) == 1,
 #define EVT_STREAM_ON	BIT(1)	/* The application started the stream */
 
 /* Aligning each transfer buffer to its size keeps it inside a 64 KiB
- * window, as the controller requires.
+ * window, as the controller requires. A stream is either bulk or
+ * isochronous, so the two sets share memory.
  */
-static uint8_t chunks[NUM_CHUNKS][CHUNK_SIZE] __aligned(CHUNK_SIZE)
-	UHC_DWC3_DMA_SECTION;
-static uint8_t iso_bufs[NUM_ISO_XFERS][ISO_BUF_SIZE] __aligned(ISO_BUF_SIZE)
-	UHC_DWC3_DMA_SECTION;
+static union {
+	uint8_t chunks[NUM_CHUNKS][CHUNK_SIZE];
+	uint8_t iso_bufs[NUM_ISO_XFERS][ISO_BUF_SIZE];
+} xfer_bufs __aligned(MAX(CHUNK_SIZE, ISO_BUF_SIZE)) UHC_DWC3_DMA_SECTION;
 
 static uint8_t cfg_desc[UHC_DWC3_CTRL_MAX_LEN];
 
@@ -412,7 +413,8 @@ static int run_isoch(size_t xfer_len)
 	int ret;
 
 	for (int i = 0; i < NUM_ISO_XFERS; i++) {
-		ret = uhc_dwc3_isoch_in_submit(uhc_dev, iso_bufs[i], xfer_len);
+		ret = uhc_dwc3_isoch_in_submit(uhc_dev, xfer_bufs.iso_bufs[i],
+						 xfer_len);
 		if (ret) {
 			return ret;
 		}
@@ -451,7 +453,8 @@ static int run_bulk(size_t xfer_len)
 	int ret;
 
 	for (int i = 0; i < NUM_CHUNKS; i++) {
-		ret = uhc_dwc3_bulk_in_submit(uhc_dev, chunks[i], xfer_len);
+		ret = uhc_dwc3_bulk_in_submit(uhc_dev, xfer_bufs.chunks[i],
+					      xfer_len);
 		if (ret) {
 			return ret;
 		}
