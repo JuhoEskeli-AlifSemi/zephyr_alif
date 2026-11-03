@@ -326,7 +326,8 @@ struct uhc_dwc3_config {
 	void (*irq_enable_func)(const struct device *dev);
 	void (*irq_disable_func)(const struct device *dev);
 	const struct device *clock_dev;
-	clock_control_subsys_t clock_subsys;
+	const clock_control_subsys_t *clock_subsys; /* All clocks of the node */
+	size_t num_clocks;
 };
 
 struct uhc_dwc3_data {
@@ -2752,10 +2753,13 @@ static int uhc_dwc3_driver_init(const struct device *dev)
 			return -EIO;
 		}
 
-		ret = clock_control_on(cfg->clock_dev, cfg->clock_subsys);
-		if (ret != 0 && ret != -EALREADY) {
-			LOG_ERR("Failed to enable clock: %d", ret);
-			return ret;
+		for (size_t i = 0; i < cfg->num_clocks; i++) {
+			ret = clock_control_on(cfg->clock_dev,
+					       cfg->clock_subsys[i]);
+			if (ret != 0 && ret != -EALREADY) {
+				LOG_ERR("Failed to enable clock %zu: %d", i, ret);
+				return ret;
+			}
 		}
 	}
 
@@ -3344,6 +3348,9 @@ static const struct uhc_api dwc3_uhc_api = {
  * This uses a separate compatible from the UDC (device) driver
  * which uses snps,dwc3, avoiding any DT_DRV_COMPAT conflicts.
  */
+#define UHC_DWC3_CLOCK_SUBSYS(idx, inst)					\
+	(clock_control_subsys_t)DT_INST_CLOCKS_CELL_BY_IDX(inst, idx, clkid)
+
 #define UHC_DWC3_DEVICE_DEFINE(inst)						\
 	static void uhc_dwc3_irq_enable_##inst(const struct device *dev)	\
 	{									\
@@ -3365,14 +3372,19 @@ static const struct uhc_api dwc3_uhc_api = {
 		.priv = &uhc_dwc3_priv_##inst,					\
 	};									\
 										\
+	static const clock_control_subsys_t uhc_dwc3_clocks_##inst[] = {	\
+		LISTIFY(DT_INST_NUM_CLOCKS(inst), UHC_DWC3_CLOCK_SUBSYS,	\
+			(,), inst)						\
+	};									\
+										\
 	static const struct uhc_dwc3_config uhc_dwc3_cfg_##inst = {		\
 		.base = DT_INST_REG_ADDR(inst),					\
 		.irq_enable_func = uhc_dwc3_irq_enable_##inst,			\
 		.irq_disable_func = uhc_dwc3_irq_disable_##inst,		\
 		.clock_dev = DEVICE_DT_GET_OR_NULL(				\
 			DT_INST_CLOCKS_CTLR(inst)),				\
-		.clock_subsys = (clock_control_subsys_t)			\
-			DT_INST_CLOCKS_CELL_BY_IDX(inst, 0, clkid),		\
+		.clock_subsys = uhc_dwc3_clocks_##inst,				\
+		.num_clocks = ARRAY_SIZE(uhc_dwc3_clocks_##inst),		\
 	};									\
 										\
 	DEVICE_DT_INST_DEFINE(inst, uhc_dwc3_driver_init, NULL,			\
