@@ -38,6 +38,7 @@
 
 #include "uhc_common.h"
 #include "../common/usb_dwc3_hw.h"
+#include "soc_memory_map.h"
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(uhc_dwc3, CONFIG_UHC_DRIVER_LOG_LEVEL);
@@ -181,11 +182,10 @@ struct xhci_erst_entry {
 #define MAX_SLOTS_EN		1   /* We only need 1 slot for enumeration */
 
 /* ---- Static DMA-accessible buffers ---- */
-/* Must be in shared SRAM (not DTCM) so USB DMA engine can access them.
- * On Alif Ensemble, SRAM0 at 0x02000000 is globally bus-accessible.
- * DTCM (default .bss) is M55-local and NOT reachable by USB DMA.
+/* In SRAM0 or, on SoCs with only TCM, in the NON_SECURE0 TCM region; the
+ * controller is given their global addresses (dma_addr()).
  */
-#define UHC_DMA_SECTION __attribute__((section(".sram0.bss.uhc_dma")))
+#define UHC_DMA_SECTION UHC_DWC3_DMA_SECTION
 
 /* Device Context Base Address Array: (MaxSlots+1) entries × 8 bytes */
 static uint32_t dcbaa[(MAX_SLOTS_EN + 1) * 2] __aligned(64) UHC_DMA_SECTION;
@@ -341,6 +341,14 @@ struct uhc_dwc3_data {
 	uint8_t isoch_out_ep; /* Isochronous OUT endpoint address */
 };
 
+/* Address of a buffer as the controller's DMA sees it: TCM through its
+ * global alias, other memory unchanged.
+ */
+static inline uint32_t dma_addr(const volatile void *p)
+{
+	return local_to_global(p);
+}
+
 /* ---- Register access helpers ---- */
 
 static inline void xhci_write32(const struct uhc_dwc3_config *cfg,
@@ -405,7 +413,7 @@ static void cmd_ring_init(void)
 {
 	memset(cmd_ring, 0, sizeof(cmd_ring));
 	/* Link TRB: TC=1 so controller toggles cycle on follow, C=0 initially */
-	cmd_ring[CMD_RING_SIZE].param_lo = (uint32_t)cmd_ring;
+	cmd_ring[CMD_RING_SIZE].param_lo = dma_addr(cmd_ring);
 	cmd_ring[CMD_RING_SIZE].param_hi = 0;
 	cmd_ring[CMD_RING_SIZE].status = 0;
 	cmd_ring[CMD_RING_SIZE].control = TRB_TYPE(TRB_LINK) | TRB_TC;
@@ -445,7 +453,7 @@ static void cmd_ring_enqueue(uint32_t p_lo, uint32_t p_hi,
 static void ep0_ring_init(void)
 {
 	memset(ep0_ring, 0, sizeof(ep0_ring));
-	ep0_ring[EP0_RING_SIZE].param_lo = (uint32_t)ep0_ring;
+	ep0_ring[EP0_RING_SIZE].param_lo = dma_addr(ep0_ring);
 	ep0_ring[EP0_RING_SIZE].param_hi = 0;
 	ep0_ring[EP0_RING_SIZE].status = 0;
 	ep0_ring[EP0_RING_SIZE].control = TRB_TYPE(TRB_LINK) | TRB_TC;
@@ -486,7 +494,7 @@ static void evt_ring_init(void)
 	memset(evt_ring, 0, sizeof(evt_ring));
 	memset(erst, 0, sizeof(erst));
 
-	erst[0].seg_addr_lo = (uint32_t)evt_ring;
+	erst[0].seg_addr_lo = dma_addr(evt_ring);
 	erst[0].seg_addr_hi = 0;
 	erst[0].seg_size = EVT_RING_SIZE;
 
@@ -551,7 +559,7 @@ static struct xhci_trb *evt_ring_wait(const struct uhc_dwc3_config *cfg,
 /* Update ERDP to tell controller we consumed events */
 static void evt_ring_update_erdp(const struct uhc_dwc3_config *cfg)
 {
-	uint32_t addr = (uint32_t)&evt_ring[evt_ring_deq];
+	uint32_t addr = dma_addr(&evt_ring[evt_ring_deq]);
 
 	/* Set EHB (Event Handler Busy) bit to clear it */
 	xhci_rt_write(cfg, XHCI_ERDP_LO, addr | BIT(3));
@@ -563,7 +571,7 @@ static void evt_ring_update_erdp(const struct uhc_dwc3_config *cfg)
 static void bulk_in_ring_init(void)
 {
 	memset(bulk_in_ring, 0, sizeof(bulk_in_ring));
-	bulk_in_ring[BULK_RING_SIZE].param_lo = (uint32_t)bulk_in_ring;
+	bulk_in_ring[BULK_RING_SIZE].param_lo = dma_addr(bulk_in_ring);
 	bulk_in_ring[BULK_RING_SIZE].param_hi = 0;
 	bulk_in_ring[BULK_RING_SIZE].status = 0;
 	bulk_in_ring[BULK_RING_SIZE].control = TRB_TYPE(TRB_LINK) | TRB_TC;
@@ -574,7 +582,7 @@ static void bulk_in_ring_init(void)
 static void bulk_out_ring_init(void)
 {
 	memset(bulk_out_ring, 0, sizeof(bulk_out_ring));
-	bulk_out_ring[BULK_RING_SIZE].param_lo = (uint32_t)bulk_out_ring;
+	bulk_out_ring[BULK_RING_SIZE].param_lo = dma_addr(bulk_out_ring);
 	bulk_out_ring[BULK_RING_SIZE].param_hi = 0;
 	bulk_out_ring[BULK_RING_SIZE].status = 0;
 	bulk_out_ring[BULK_RING_SIZE].control = TRB_TYPE(TRB_LINK) | TRB_TC;
@@ -585,7 +593,7 @@ static void bulk_out_ring_init(void)
 static void isoch_in_ring_init(void)
 {
 	memset(isoch_in_ring, 0, sizeof(isoch_in_ring));
-	isoch_in_ring[ISOCH_RING_SIZE].param_lo = (uint32_t)isoch_in_ring;
+	isoch_in_ring[ISOCH_RING_SIZE].param_lo = dma_addr(isoch_in_ring);
 	isoch_in_ring[ISOCH_RING_SIZE].param_hi = 0;
 	isoch_in_ring[ISOCH_RING_SIZE].status = 0;
 	isoch_in_ring[ISOCH_RING_SIZE].control = TRB_TYPE(TRB_LINK) | TRB_TC;
@@ -596,7 +604,7 @@ static void isoch_in_ring_init(void)
 static void isoch_out_ring_init(void)
 {
 	memset(isoch_out_ring, 0, sizeof(isoch_out_ring));
-	isoch_out_ring[ISOCH_RING_SIZE].param_lo = (uint32_t)isoch_out_ring;
+	isoch_out_ring[ISOCH_RING_SIZE].param_lo = dma_addr(isoch_out_ring);
 	isoch_out_ring[ISOCH_RING_SIZE].param_hi = 0;
 	isoch_out_ring[ISOCH_RING_SIZE].status = 0;
 	isoch_out_ring[ISOCH_RING_SIZE].control = TRB_TYPE(TRB_LINK) | TRB_TC;
@@ -671,7 +679,7 @@ static int xhci_control_transfer(const struct uhc_dwc3_config *cfg,
 	if (wLength > 0) {
 		uint32_t dir = is_in ? TRB_DIR_IN : 0;
 
-		ep0_ring_enqueue((uint32_t)xfer_data_buf, 0, wLength,
+		ep0_ring_enqueue(dma_addr(xfer_data_buf), 0, wLength,
 				 TRB_TYPE(TRB_DATA) | dir | TRB_IOC);
 	}
 
@@ -910,11 +918,11 @@ static int xhci_controller_init(const struct uhc_dwc3_config *cfg)
 	sys_cache_data_flush_range(input_ctx_buf, sizeof(input_ctx_buf));
 
 	/* Set DCBAAP */
-	xhci_op_write(cfg, XHCI_DCBAAP_LO, (uint32_t)dcbaa);
+	xhci_op_write(cfg, XHCI_DCBAAP_LO, dma_addr(dcbaa));
 	xhci_op_write(cfg, XHCI_DCBAAP_HI, 0);
 
 	/* Set Command Ring Control Register (must be written while halted!) */
-	uint32_t crcr_val = (uint32_t)cmd_ring | cmd_ring_cycle;
+	uint32_t crcr_val = dma_addr(cmd_ring) | cmd_ring_cycle;
 
 	xhci_op_write(cfg, XHCI_CRCR_LO, crcr_val);
 	xhci_op_write(cfg, XHCI_CRCR_HI, 0);
@@ -924,26 +932,26 @@ static int xhci_controller_init(const struct uhc_dwc3_config *cfg)
 
 	LOG_INF("CRCR write: 0x%08x, readback: 0x%08x %s",
 		crcr_val, crcr_rb,
-		(crcr_rb & ~0x7) == ((uint32_t)cmd_ring & ~0x7) ? "OK" : "MISMATCH!");
+		(crcr_rb & ~0x7) == (dma_addr(cmd_ring) & ~0x7) ? "OK" : "MISMATCH!");
 
 	/* Set CONFIG.MaxSlotsEn */
 	xhci_op_write(cfg, XHCI_CONFIG, MAX_SLOTS_EN);
 
 	/* Set up Event Ring: ERSTSZ, ERDP, ERSTBA */
 	xhci_rt_write(cfg, XHCI_ERSTSZ, 1);
-	xhci_rt_write(cfg, XHCI_ERDP_LO, (uint32_t)evt_ring);
+	xhci_rt_write(cfg, XHCI_ERDP_LO, dma_addr(evt_ring));
 	xhci_rt_write(cfg, XHCI_ERDP_HI, 0);
 	/* ERSTBA must be written last (it triggers HW to load the table) */
-	xhci_rt_write(cfg, XHCI_ERSTBA_LO, (uint32_t)erst);
+	xhci_rt_write(cfg, XHCI_ERSTBA_LO, dma_addr(erst));
 	xhci_rt_write(cfg, XHCI_ERSTBA_HI, 0);
 
 	/* Readback verify event ring setup */
 	LOG_INF("Event ring setup readback:");
 	LOG_INF("  ERSTSZ:    %u (expect 1)", xhci_rt_read(cfg, XHCI_ERSTSZ));
 	LOG_INF("  ERDP_LO:   0x%08x (expect 0x%08x)",
-		xhci_rt_read(cfg, XHCI_ERDP_LO), (uint32_t)evt_ring);
+		xhci_rt_read(cfg, XHCI_ERDP_LO), dma_addr(evt_ring));
 	LOG_INF("  ERSTBA_LO: 0x%08x (expect 0x%08x)",
-		xhci_rt_read(cfg, XHCI_ERSTBA_LO), (uint32_t)erst);
+		xhci_rt_read(cfg, XHCI_ERSTBA_LO), dma_addr(erst));
 
 	/* Verify ERST contents */
 	LOG_INF("  ERST[0]: addr=0x%08x size=%u",
@@ -1262,14 +1270,14 @@ static int xhci_address_device(const struct uhc_dwc3_config *cfg,
 	/* Field 1: EP Type=4 (Control Bidirectional), CErr=3, MaxPacketSize */
 	ep0[1] = (3 << 1) | (4 << 3) | (mps << 16); /* CErr=3, EPType=Control, MPS */
 	/* Field 2: TR Dequeue Pointer (low) with DCS=1 */
-	ep0[2] = (uint32_t)ep0_ring | 1; /* DCS=1 */
+	ep0[2] = dma_addr(ep0_ring) | 1; /* DCS=1 */
 	/* Field 3: TR Dequeue Pointer (high) - 0 for 32-bit */
 	ep0[3] = 0;
 	/* Field 4: Average TRB Length = 8 (for control) */
 	ep0[4] = 8;
 
 	/* Set output device context pointer in DCBAA */
-	dcbaa[slot_id * 2] = (uint32_t)dev_ctx_buf;
+	dcbaa[slot_id * 2] = dma_addr(dev_ctx_buf);
 	dcbaa[slot_id * 2 + 1] = 0;
 
 	/* Flush input context and DCBAA to SRAM */
@@ -1278,7 +1286,7 @@ static int xhci_address_device(const struct uhc_dwc3_config *cfg,
 	sys_cache_data_flush_range(dcbaa, sizeof(dcbaa));
 
 	/* Enqueue Address Device Command */
-	cmd_ring_enqueue((uint32_t)input_ctx_buf, 0, 0,
+	cmd_ring_enqueue(dma_addr(input_ctx_buf), 0, 0,
 			 TRB_TYPE(TRB_ADDRESS_DEVICE) | (slot_id << 24));
 
 	xhci_ring_doorbell(cfg, 0, 0);
@@ -1349,7 +1357,7 @@ static int xhci_get_device_descriptor(const struct uhc_dwc3_config *cfg,
 			 TRB_TYPE(TRB_SETUP) | TRB_IDT | TRB_TRT_IN);
 
 	/* Data TRB: point to data buffer, length=req_len, direction=IN */
-	ep0_ring_enqueue((uint32_t)xfer_data_buf, 0,
+	ep0_ring_enqueue(dma_addr(xfer_data_buf), 0,
 			 req_len, /* Transfer Length */
 			 TRB_TYPE(TRB_DATA) | TRB_DIR_IN | TRB_IOC);
 
@@ -1424,7 +1432,7 @@ static int xhci_evaluate_context_mps(const struct uhc_dwc3_config *cfg,
 
 	sys_cache_data_flush_range(input_ctx_buf, sizeof(input_ctx_buf));
 
-	cmd_ring_enqueue((uint32_t)input_ctx_buf, 0, 0,
+	cmd_ring_enqueue(dma_addr(input_ctx_buf), 0, 0,
 			 TRB_TYPE(TRB_EVAL_CTX) | (slot_id << 24));
 	xhci_ring_doorbell(cfg, 0, 0);
 
@@ -1522,7 +1530,7 @@ static int xhci_configure_endpoint(const struct uhc_dwc3_config *cfg,
 	ep_in[1] = (3 << 1) |                /* CErr = 3 */
 		   (XHCI_EP_TYPE_BULK_IN << 3) | /* EP Type */
 		   (max_packet_size << 16);   /* Max Packet Size */
-	ep_in[2] = (uint32_t)bulk_in_ring | 1; /* TR Dequeue Ptr + DCS=1 */
+	ep_in[2] = dma_addr(bulk_in_ring) | 1; /* TR Dequeue Ptr + DCS=1 */
 	ep_in[3] = 0;
 	ep_in[4] = 0; /* Average TRB Length (0 = let HW decide) */
 
@@ -1533,7 +1541,7 @@ static int xhci_configure_endpoint(const struct uhc_dwc3_config *cfg,
 		ep_out[1] = (3 << 1) |
 			    (XHCI_EP_TYPE_BULK_OUT << 3) |
 			    (max_packet_size << 16);
-		ep_out[2] = (uint32_t)bulk_out_ring | 1;
+		ep_out[2] = dma_addr(bulk_out_ring) | 1;
 		ep_out[3] = 0;
 		ep_out[4] = 0;
 	}
@@ -1541,7 +1549,7 @@ static int xhci_configure_endpoint(const struct uhc_dwc3_config *cfg,
 	sys_cache_data_flush_range(input_ctx_buf, sizeof(input_ctx_buf));
 
 	/* Enqueue Configure Endpoint Command */
-	cmd_ring_enqueue((uint32_t)input_ctx_buf, 0, 0,
+	cmd_ring_enqueue(dma_addr(input_ctx_buf), 0, 0,
 			 TRB_TYPE(TRB_CONFIG_EP) | (slot_id << 24));
 
 	xhci_ring_doorbell(cfg, 0, 0);
@@ -1585,7 +1593,7 @@ static int xhci_bulk_transfer_out(const struct uhc_dwc3_config *cfg,
 
 	bulk_ring_enqueue(bulk_out_ring, BULK_RING_SIZE,
 			  &bulk_out_cycle, &bulk_out_enq,
-			  (uint32_t)bulk_out_buf, 0, (uint32_t)len,
+			  dma_addr(bulk_out_buf), 0, (uint32_t)len,
 			  TRB_TYPE(TRB_NORMAL) | TRB_IOC);
 
 	xhci_ring_doorbell(cfg, slot_id, dci);
@@ -1626,7 +1634,7 @@ static int xhci_bulk_transfer_in(const struct uhc_dwc3_config *cfg,
 
 	bulk_ring_enqueue(bulk_in_ring, BULK_RING_SIZE,
 			  &bulk_in_cycle, &bulk_in_enq,
-			  (uint32_t)bulk_in_buf, 0, (uint32_t)len,
+			  dma_addr(bulk_in_buf), 0, (uint32_t)len,
 			  TRB_TYPE(TRB_NORMAL) | TRB_IOC);
 
 	xhci_ring_doorbell(cfg, slot_id, dci);
@@ -1671,7 +1679,7 @@ static int xhci_bulk_in_submit(const struct uhc_dwc3_config *cfg,
 			       uint8_t slot_id, uint8_t ep_addr,
 			       uint8_t *buf, size_t len)
 {
-	uintptr_t addr = (uintptr_t)buf;
+	uintptr_t addr = dma_addr(buf);
 	struct bulk_in_req *req;
 
 	if (ep_addr == 0) {
@@ -1704,7 +1712,7 @@ static int xhci_bulk_in_submit(const struct uhc_dwc3_config *cfg,
 
 	bulk_ring_enqueue(bulk_in_ring, BULK_RING_SIZE,
 			  &bulk_in_cycle, &bulk_in_enq,
-			  (uint32_t)buf, 0, (uint32_t)len,
+			  dma_addr(buf), 0, (uint32_t)len,
 			  TRB_TYPE(TRB_NORMAL) | TRB_IOC);
 
 	xhci_ring_doorbell(cfg, slot_id, ep_to_dci(ep_addr));
@@ -1734,7 +1742,7 @@ static int xhci_bulk_in_reap(const struct uhc_dwc3_config *cfg,
 		}
 
 		if (TRB_TYPE_GET(evt->control) == TRB_TRANSFER_EVENT &&
-		    evt->param_lo == (uint32_t)req->trb) {
+		    evt->param_lo == dma_addr(req->trb)) {
 			break;
 		}
 
@@ -1839,7 +1847,7 @@ static int xhci_configure_isoch_endpoint(const struct uhc_dwc3_config *cfg,
 		ep[1] = (0 << 1) |                      /* CErr=0 for isoch */
 			(XHCI_EP_TYPE_ISOCH_OUT << 3) |
 			((uint32_t)out_mps << 16);
-		ep[2] = (uint32_t)isoch_out_ring | 1;    /* DCS=1 */
+		ep[2] = dma_addr(isoch_out_ring) | 1;    /* DCS=1 */
 		ep[3] = 0;
 		ep[4] = out_mps; /* Average TRB Length = MPS */
 	}
@@ -1852,14 +1860,14 @@ static int xhci_configure_isoch_endpoint(const struct uhc_dwc3_config *cfg,
 		ep[1] = (0 << 1) |                     /* CErr=0 for isoch */
 			(XHCI_EP_TYPE_ISOCH_IN << 3) |
 			((uint32_t)in_mps << 16);
-		ep[2] = (uint32_t)isoch_in_ring | 1;
+		ep[2] = dma_addr(isoch_in_ring) | 1;
 		ep[3] = 0;
 		ep[4] = in_mps;
 	}
 
 	sys_cache_data_flush_range(input_ctx_buf, sizeof(input_ctx_buf));
 
-	cmd_ring_enqueue((uint32_t)input_ctx_buf, 0, 0,
+	cmd_ring_enqueue(dma_addr(input_ctx_buf), 0, 0,
 			 TRB_TYPE(TRB_CONFIG_EP) | (slot_id << 24));
 
 	xhci_ring_doorbell(cfg, 0, 0);
@@ -1932,13 +1940,13 @@ static int xhci_configure_isoch_in(const struct uhc_dwc3_config *cfg,
 		(XHCI_EP_TYPE_ISOCH_IN << 3) |
 		((uint32_t)burst << 8) |
 		((uint32_t)mps << 16);
-	ep[2] = (uint32_t)isoch_in_ring | 1;	/* DCS=1 */
+	ep[2] = dma_addr(isoch_in_ring) | 1;	/* DCS=1 */
 	ep[3] = 0;
 	ep[4] = (esit << 16) | esit;		/* Max ESIT Payload, Avg TRB Length */
 
 	sys_cache_data_flush_range(input_ctx_buf, sizeof(input_ctx_buf));
 
-	cmd_ring_enqueue((uint32_t)input_ctx_buf, 0, 0,
+	cmd_ring_enqueue(dma_addr(input_ctx_buf), 0, 0,
 			 TRB_TYPE(TRB_CONFIG_EP) | (slot_id << 24));
 
 	xhci_ring_doorbell(cfg, 0, 0);
@@ -1978,7 +1986,7 @@ static int xhci_isoch_in_submit(const struct uhc_dwc3_config *cfg,
 				uint8_t slot_id, uint8_t ep_addr,
 				uint8_t *buf, size_t len)
 {
-	uintptr_t addr = (uintptr_t)buf;
+	uintptr_t addr = dma_addr(buf);
 	struct isoch_in_req *req;
 	uint32_t tlbpc;
 
@@ -2013,7 +2021,7 @@ static int xhci_isoch_in_submit(const struct uhc_dwc3_config *cfg,
 
 	bulk_ring_enqueue(isoch_in_ring, ISOCH_RING_SIZE,
 			  &isoch_in_cycle, &isoch_in_enq,
-			  (uint32_t)buf, 0, (uint32_t)len,
+			  dma_addr(buf), 0, (uint32_t)len,
 			  TRB_TYPE(TRB_ISOCH) | TRB_TLBPC(tlbpc) |
 			  TRB_ISP | TRB_IOC | TRB_SIA);
 
@@ -2030,7 +2038,7 @@ static bool isoch_in_later_req(uint32_t trb_addr)
 			&isoch_in_reqs[(isoch_in_req_head + i) %
 				       ISOCH_IN_QUEUE_DEPTH];
 
-		if ((uint32_t)req->trb == trb_addr) {
+		if (dma_addr(req->trb) == trb_addr) {
 			return true;
 		}
 	}
@@ -2059,7 +2067,7 @@ static int xhci_isoch_in_reap(const struct uhc_dwc3_config *cfg,
 		}
 
 		if (TRB_TYPE_GET(evt->control) == TRB_TRANSFER_EVENT) {
-			if (evt->param_lo == (uint32_t)req->trb) {
+			if (evt->param_lo == dma_addr(req->trb)) {
 				break;
 			}
 
@@ -2150,7 +2158,7 @@ static int xhci_isoch_out_prime(const struct uhc_dwc3_config *cfg,
 	for (int i = 0; i < ISOCH_NUM_BUFS; i++) {
 		bulk_ring_enqueue(isoch_out_ring, ISOCH_RING_SIZE,
 				  &isoch_out_cycle, &isoch_out_enq,
-				  (uint32_t)isoch_out_bufs[i], 0,
+				  dma_addr(isoch_out_bufs[i]), 0,
 				  (uint32_t)len,
 				  TRB_TYPE(TRB_ISOCH) | TRB_IOC | TRB_SIA);
 	}
@@ -2250,7 +2258,7 @@ static int xhci_isoch_out_pump(const struct uhc_dwc3_config *cfg,
 
 	bulk_ring_enqueue(isoch_out_ring, ISOCH_RING_SIZE,
 			  &isoch_out_cycle, &isoch_out_enq,
-			  (uint32_t)isoch_out_bufs[idx], 0,
+			  dma_addr(isoch_out_bufs[idx]), 0,
 			  (uint32_t)len,
 			  TRB_TYPE(TRB_ISOCH) | TRB_IOC | TRB_SIA);
 
@@ -2280,7 +2288,7 @@ static int xhci_isoch_in_single(const struct uhc_dwc3_config *cfg,
 
 	bulk_ring_enqueue(isoch_in_ring, ISOCH_RING_SIZE,
 			  &isoch_in_cycle, &isoch_in_enq,
-			  (uint32_t)isoch_in_bufs[0], 0,
+			  dma_addr(isoch_in_bufs[0]), 0,
 			  (uint32_t)len,
 			  TRB_TYPE(TRB_ISOCH) | TRB_IOC | TRB_SIA);
 
@@ -2360,7 +2368,7 @@ static int xhci_isoch_loopback_prime(const struct uhc_dwc3_config *cfg,
 		sys_cache_data_flush_range(isoch_out_bufs[i], ISOCH_OUT_BUF_SIZE);
 		bulk_ring_enqueue(isoch_out_ring, ISOCH_RING_SIZE,
 				  &isoch_out_cycle, &isoch_out_enq,
-				  (uint32_t)isoch_out_bufs[i], 0,
+				  dma_addr(isoch_out_bufs[i]), 0,
 				  (uint32_t)out_len,
 				  TRB_TYPE(TRB_ISOCH) | TRB_IOC | TRB_SIA);
 	}
@@ -2370,7 +2378,7 @@ static int xhci_isoch_loopback_prime(const struct uhc_dwc3_config *cfg,
 	for (int i = 0; i < ISOCH_NUM_BUFS; i++) {
 		bulk_ring_enqueue(isoch_in_ring, ISOCH_RING_SIZE,
 				  &isoch_in_cycle, &isoch_in_enq,
-				  (uint32_t)isoch_in_bufs[i], 0,
+				  dma_addr(isoch_in_bufs[i]), 0,
 				  (uint32_t)in_len,
 				  TRB_TYPE(TRB_ISOCH) | TRB_IOC | TRB_SIA);
 	}
@@ -2458,7 +2466,7 @@ static int xhci_isoch_loopback_pump(const struct uhc_dwc3_config *cfg,
 			/* Re-queue this mic buffer */
 			bulk_ring_enqueue(isoch_in_ring, ISOCH_RING_SIZE,
 					  &isoch_in_cycle, &isoch_in_enq,
-					  (uint32_t)isoch_in_bufs[bi], 0,
+					  dma_addr(isoch_in_bufs[bi]), 0,
 					  (uint32_t)in_len,
 					  TRB_TYPE(TRB_ISOCH) | TRB_IOC |
 					  TRB_SIA);
@@ -2482,7 +2490,7 @@ static int xhci_isoch_loopback_pump(const struct uhc_dwc3_config *cfg,
 
 			bulk_ring_enqueue(isoch_out_ring, ISOCH_RING_SIZE,
 					  &isoch_out_cycle, &isoch_out_enq,
-					  (uint32_t)isoch_out_bufs[bo], 0,
+					  dma_addr(isoch_out_bufs[bo]), 0,
 					  (uint32_t)bytes,
 					  TRB_TYPE(TRB_ISOCH) | TRB_IOC |
 					  TRB_SIA);

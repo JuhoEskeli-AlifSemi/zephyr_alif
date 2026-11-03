@@ -66,13 +66,13 @@ BUILD_ASSERT(DT_NUM_INST_STATUS_OKAY(DT_DRV_COMPAT) == 1,
 #define EVT_PARSED	BIT(0)	/* A camera is enumerated, caps are known */
 #define EVT_STREAM_ON	BIT(1)	/* The application started the stream */
 
-/* The USB DMA cannot reach the TCM; aligning each transfer buffer to its
- * size keeps it inside a 64 KiB window, as the controller requires.
+/* Aligning each transfer buffer to its size keeps it inside a 64 KiB
+ * window, as the controller requires.
  */
 static uint8_t chunks[NUM_CHUNKS][CHUNK_SIZE] __aligned(CHUNK_SIZE)
-	__alif_sram0_section;
+	UHC_DWC3_DMA_SECTION;
 static uint8_t iso_bufs[NUM_ISO_XFERS][ISO_BUF_SIZE] __aligned(ISO_BUF_SIZE)
-	__alif_sram0_section;
+	UHC_DWC3_DMA_SECTION;
 
 static uint8_t cfg_desc[UHC_DWC3_CTRL_MAX_LEN];
 

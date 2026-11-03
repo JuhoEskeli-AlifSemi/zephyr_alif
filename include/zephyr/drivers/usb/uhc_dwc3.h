@@ -25,6 +25,8 @@
 #include <stdint.h>
 
 #include <zephyr/device.h>
+#include <zephyr/devicetree.h>
+#include <zephyr/linker/section_tags.h>
 #include <zephyr/usb/usb_ch9.h>
 
 #ifdef __cplusplus
@@ -123,6 +125,19 @@ int uhc_dwc3_bulk_in(const struct device *dev,
 #define UHC_DWC3_BUF_ALIGN 64
 
 /**
+ * @brief Place a buffer where the controller's DMA can reach it
+ *
+ * For the buffers passed to the bulk and isochronous transfer functions:
+ * SRAM0 where the SoC has it, otherwise the NON_SECURE0 TCM region (the
+ * ``ns`` devicetree node, which must then be enabled).
+ */
+#if DT_NODE_HAS_STATUS(DT_NODELABEL(sram0), okay)
+#define UHC_DWC3_DMA_SECTION __alif_sram0_section
+#else
+#define UHC_DWC3_DMA_SECTION __alif_ns_section
+#endif
+
+/**
  * @brief Configure a lone bulk IN endpoint
  *
  * For devices whose interface has a bulk IN endpoint without a bulk OUT
@@ -148,8 +163,8 @@ int uhc_dwc3_configure_bulk_in(const struct device *dev, uint8_t ep,
  * collect completions in submission order with uhc_dwc3_bulk_in_reap().
  * Do not mix with uhc_dwc3_bulk_in() while transfers are queued.
  *
- * @p buf must be reachable by the controller's DMA (not in TCM), and must
- * not be accessed until the transfer is reaped.
+ * @p buf must be placed with @ref UHC_DWC3_DMA_SECTION and not be accessed
+ * until the transfer is reaped.
  *
  * @param dev UHC device
  * @param buf Destination buffer, aligned to @ref UHC_DWC3_BUF_ALIGN, not
@@ -212,8 +227,8 @@ int uhc_dwc3_configure_isoch_in(const struct device *dev, uint8_t ep,
  * with no transfer queued loses its data. Collect completions in
  * submission order with uhc_dwc3_isoch_in_reap().
  *
- * @p buf must be reachable by the controller's DMA (not in TCM), and must
- * not be accessed until the transfer is reaped.
+ * @p buf must be placed with @ref UHC_DWC3_DMA_SECTION and not be accessed
+ * until the transfer is reaped.
  *
  * @param dev UHC device
  * @param buf Destination buffer, aligned to @ref UHC_DWC3_BUF_ALIGN with room

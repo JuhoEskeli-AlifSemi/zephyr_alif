@@ -26,6 +26,3 @@ zephyr_library_sources_ifdef(CONFIG_VIDEO_ALIF_CAM      video_alif.c)
 zephyr_library_sources_ifdef(CONFIG_VIDEO_MIPI_CSI2_DW  video_csi_dw.c)
 zephyr_library_sources_ifdef(CONFIG_VIDEO_JPEG_HANTRO_VC9000E jpeg_hantro_vc9000e.c)
 zephyr_library_sources_ifdef(CONFIG_VIDEO_UVC_HOST	video_uvc_host.c)
-# The DWC3 host driver keeps its DMA buffers in .sram0.bss.uhc_dma, which the
-# application normally places; with the UVC camera the driver does it.
-zephyr_linker_sources_ifdef(CONFIG_VIDEO_UVC_HOST DATA_SECTIONS uvc_host_dma.ld)
